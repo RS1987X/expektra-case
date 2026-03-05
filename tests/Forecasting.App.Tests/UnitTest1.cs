@@ -137,10 +137,45 @@ public class Part1PreprocessingTests
             Assert.Equal("Training", droppedEvent.ImputationSource);
 
             Assert.Equal(5, preprocessed.AuditSummary.TotalRows);
+            Assert.Equal(5, preprocessed.AuditSummary.InputRowsBeforeDeduplication);
             Assert.Equal(1, preprocessed.AuditSummary.TrainingRows);
             Assert.Equal(4, preprocessed.AuditSummary.ValidationRows);
             Assert.Equal(4, preprocessed.AuditSummary.PersistedRows);
             Assert.Equal(1, preprocessed.AuditSummary.DroppedValidationRowsFromTrainingImputation);
+            Assert.Equal(0, preprocessed.AuditSummary.DroppedDuplicateTimestampRows);
+        }
+        finally
+        {
+            File.Delete(dataPath);
+            File.Delete(holidaysPath);
+        }
+    }
+
+    [Fact]
+    public void BuildFeatureMatrix_DeduplicatesDuplicateTimestampsWithKeepLastPolicy()
+    {
+        var dataPath = CreateTempFile(
+            """
+            utcTime;Target;Temperature;Windspeed;SolarIrradiation
+            2024-01-01 00:00;1,0;10,0;2,0;0,0
+            2024-01-01 00:00;9,0;19,0;2,9;0,9
+            2024-01-01 00:15;3,0;11,0;2,1;0,1
+            """);
+
+        var holidaysPath = CreateTempFile(
+            """
+            Id;Country;StartDate;EndDate;Type;RegionalScope;Name
+            123;SE;2024-01-01;;Public;National;SV Nyårsdagen
+            """);
+
+        try
+        {
+            var features = Part1Preprocessing.BuildFeatureMatrix(dataPath, holidaysPath);
+
+            Assert.Equal(2, features.Count);
+            Assert.Equal(new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), features[0].UtcTime);
+            Assert.Equal(9.0, features[0].Target);
+            Assert.Equal(19.0, features[0].Temperature);
         }
         finally
         {
