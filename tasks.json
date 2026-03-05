@@ -1,0 +1,54 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Restore",
+      "type": "shell",
+      "command": "${env:HOME}/.dotnet/dotnet",
+      "args": [
+        "restore",
+        "ExpektraCase.sln"
+      ],
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Build",
+      "type": "shell",
+      "command": "${env:HOME}/.dotnet/dotnet",
+      "args": [
+        "build",
+        "ExpektraCase.sln",
+        "--no-restore"
+      ],
+      "group": "build",
+      "dependsOn": "Restore",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Test",
+      "type": "shell",
+      "command": "${env:HOME}/.dotnet/dotnet",
+      "args": [
+        "test",
+        "ExpektraCase.sln",
+        "--no-build"
+      ],
+      "group": "test",
+      "dependsOn": "Build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Run API",
+      "type": "shell",
+      "command": "${env:HOME}/.dotnet/dotnet",
+      "args": [
+        "run",
+        "--project",
+        "src/Forecasting.Api/Forecasting.Api.csproj"
+      ],
+      "isBackground": true,
+      "problemMatcher": "$msCompile"
+    }
+  ]
+}

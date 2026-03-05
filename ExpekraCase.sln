@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{6F6DA8C1-C4FB-4721-A168-D4AD2E8D8A0E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Forecasting.App", "src\Forecasting.App\Forecasting.App.csproj", "{EF6EB541-8CD6-48E9-A21A-D9B4DCE0C930}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{99230C6F-F088-4C89-AB18-A5B000C51F96}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Forecasting.App.Tests", "tests\Forecasting.App.Tests\Forecasting.App.Tests.csproj", "{5E68F075-A7CC-4780-A132-2E5B11A2262F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{EF6EB541-8CD6-48E9-A21A-D9B4DCE0C930}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EF6EB541-8CD6-48E9-A21A-D9B4DCE0C930}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EF6EB541-8CD6-48E9-A21A-D9B4DCE0C930}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EF6EB541-8CD6-48E9-A21A-D9B4DCE0C930}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5E68F075-A7CC-4780-A132-2E5B11A2262F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5E68F075-A7CC-4780-A132-2E5B11A2262F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5E68F075-A7CC-4780-A132-2E5B11A2262F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5E68F075-A7CC-4780-A132-2E5B11A2262F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{EF6EB541-8CD6-48E9-A21A-D9B4DCE0C930} = {6F6DA8C1-C4FB-4721-A168-D4AD2E8D8A0E}
+		{5E68F075-A7CC-4780-A132-2E5B11A2262F} = {99230C6F-F088-4C89-AB18-A5B000C51F96}
+	EndGlobalSection
+EndGlobal

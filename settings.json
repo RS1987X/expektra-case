@@ -1,0 +1,14 @@
+{
+  "csharp.suppressDotnetInstallWarning": true,
+  "omnisharp.sdkPath": "${env:HOME}/.dotnet",
+  "dotnetAcquisitionExtension.existingDotnetPath": [
+    {
+      "extensionId": "ms-dotnettools.csharp",
+      "path": "${env:HOME}/.dotnet/dotnet"
+    },
+    {
+      "extensionId": "ms-dotnettools.csdevkit",
+      "path": "${env:HOME}/.dotnet/dotnet"
+    }
+  ]
+}
