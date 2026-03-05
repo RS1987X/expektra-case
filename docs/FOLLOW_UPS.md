@@ -6,7 +6,7 @@
 - Follow-up action: validate this imputation strategy with stakeholders and decide whether these columns should remain forward-filled, become configurable per column, or use a different strategy.
 - DONE (2026-03-05): persist the generated Part 1 feature matrix to the `artifacts/` folder as CSV so output is inspectable and reusable across later phases.
 - Follow-up action: possibly persist a preprocessing lineage file to `artifacts/` (for example transformation steps, fill strategy, and input/output metadata) for traceability.
-- Follow-up action: implement split-first preprocessing for evaluation by hard-coding validation as the last 30 days, then applying imputations after the split to avoid cross-boundary leakage.
+- DONE (2026-03-05): implement split-first preprocessing for evaluation by hard-coding validation as the last 30 days, then applying imputations after the split to avoid cross-boundary leakage.
 - DONE (2026-03-05): as part of preprocessing, exclude validation rows where `Target` is imputed from training context before persisting the dataset sent downstream, while keeping validation rows imputed from prior validation rows; persist compact audit artifacts (event-only CSV for dropped rows + summary JSON) so filtering is reproducible and inspectable.
 - Follow-up action: add and enforce a boundary check that each required column’s first observed non-null value occurs before validation starts; fail fast or warn explicitly if this is not true.
 - Follow-up action: add a lightweight preprocessing QA visualization step (time-series + distribution/boxplot for key numeric features, including imputed segments) to detect outliers, flatlines, clipping, or other suspicious patterns before downstream modeling.
