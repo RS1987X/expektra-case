@@ -27,6 +27,7 @@ public sealed record FeatureRow(
 public static class Part1Preprocessing
 {
     private static readonly CultureInfo SwedishCulture = CultureInfo.GetCultureInfo("sv-SE");
+    private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
     private static readonly string[] AcceptedDateTimeFormats = ["yyyy-MM-dd HH:mm", "yyyy-MM-dd HH:mm:ss"];
 
     public static IReadOnlyList<FeatureRow> BuildFeatureMatrix(string dataCsvPath, string holidaysCsvPath)
@@ -104,6 +105,36 @@ public static class Part1Preprocessing
         }
 
         return dates;
+    }
+
+    public static void WriteFeatureMatrixCsv(IReadOnlyList<FeatureRow> features, string outputCsvPath)
+    {
+        var directory = Path.GetDirectoryName(outputCsvPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        using var writer = new StreamWriter(outputCsvPath, false);
+        writer.WriteLine("utcTime;Target;Temperature;Windspeed;SolarIrradiation;HourOfDay;MinuteOfHour;DayOfWeek;IsHoliday;HourSin;HourCos;WeekdaySin;WeekdayCos");
+
+        foreach (var row in features)
+        {
+            writer.WriteLine(string.Join(';',
+                row.UtcTime.ToString("yyyy-MM-dd HH:mm:ss", InvariantCulture),
+                row.Target.ToString(InvariantCulture),
+                row.Temperature.ToString(InvariantCulture),
+                row.Windspeed.ToString(InvariantCulture),
+                row.SolarIrradiation.ToString(InvariantCulture),
+                row.HourOfDay.ToString(InvariantCulture),
+                row.MinuteOfHour.ToString(InvariantCulture),
+                row.DayOfWeek.ToString(InvariantCulture),
+                row.IsHoliday.ToString(InvariantCulture),
+                row.HourSin.ToString(InvariantCulture),
+                row.HourCos.ToString(InvariantCulture),
+                row.WeekdaySin.ToString(InvariantCulture),
+                row.WeekdayCos.ToString(InvariantCulture)));
+        }
     }
 
     public static IReadOnlyList<RawDataRow> ReadRawDataRows(string dataCsvPath)

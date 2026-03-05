@@ -54,6 +54,53 @@ public class Part1PreprocessingTests
         Assert.Equal([3.0, 3.0, 3.0, 3.0, 5.0], filled);
     }
 
+    [Fact]
+    public void WriteFeatureMatrixCsv_CreatesCsvInArtifactsShape()
+    {
+        var outputPath = Path.Combine(Path.GetTempPath(), "artifacts", $"features-{Guid.NewGuid():N}.csv");
+        var features = new[]
+        {
+            new FeatureRow(
+                new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                10.0,
+                1.0,
+                2.0,
+                0.0,
+                0,
+                0,
+                1,
+                true,
+                0.0,
+                1.0,
+                0.5,
+                0.5)
+        };
+
+        try
+        {
+            Part1Preprocessing.WriteFeatureMatrixCsv(features, outputPath);
+
+            Assert.True(File.Exists(outputPath));
+            var lines = File.ReadAllLines(outputPath);
+            Assert.Equal(2, lines.Length);
+            Assert.Contains("utcTime;Target;Temperature;Windspeed;SolarIrradiation", lines[0]);
+            Assert.Contains("2024-01-01 00:00:00;10;1;2;0;0;0;1;True", lines[1]);
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+            {
+                File.Delete(outputPath);
+            }
+
+            var parent = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrWhiteSpace(parent) && Directory.Exists(parent))
+            {
+                Directory.Delete(parent, false);
+            }
+        }
+    }
+
     private static string CreateTempFile(string content)
     {
         var path = Path.Combine(Path.GetTempPath(), $"forecasting-test-{Guid.NewGuid():N}.csv");
