@@ -128,11 +128,21 @@ Implement Part 2 according to the assignment: create lagged target features, rol
 - `Lag192` for row `i` uses `Target` from row `i-192`; if missing, the row is invalid for the Part 2 dataset.
 - `Lag672` for row `i` uses `Target` from row `i-672`; if missing, the row is invalid for the Part 2 dataset.
 - Rolling 4h/24h is computed over the previous 16/96 target values up to and including time `t` (no lookahead).
-- Standard deviation is defined as population standard deviation (`n` in the denominator) for deterministic implementation.
+- Standard deviation is defined as population standard deviation (`n` in the denominator) computed within each rolling window only (not across the full time series).
 - A row at time `t` is included only if:
 	1) all required lag/rolling values exist,
 	2) the full label horizon `t+1..t+192` exists in the dataset.
-- The number of Part 2 rows is therefore: `N - max(672, windowRequirement) - 192`, adjusted for any additional invalid rows.
+- Here, `windowRequirement` means the largest rolling lookback in steps (currently 96 from the 24h window). Therefore, with current settings, row count is `N - max(672, 96) - 192 = N - 864`, adjusted for any additional invalid rows.
+
+### Split-safe multi-step mapping rule (purging)
+
+- Use anchor-based samples: each anchor at time `t` maps to one full target vector `y(t+1..t+192)`.
+- To avoid leakage, split eligibility is based on the label horizon, not only on anchor timestamp.
+- Let `v0` be validation start timestamp and `H = 192`.
+	- Training anchors must satisfy: `t + H < v0`.
+	- Validation anchors must satisfy: `t >= v0` and `t + H <= seriesEnd`.
+- This implies a purge zone before validation: anchors in `(v0 - H, v0)` are excluded from both train and validation because their labels would overlap validation.
+- Do not use partial-horizon labels in Del 2; keep only anchors with a complete 192-step output vector.
 
 ### Implementation steps
 
