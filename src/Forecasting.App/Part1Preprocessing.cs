@@ -133,6 +133,8 @@ public static class Part1Preprocessing
             var row = validationBuilt.Features[index];
             var isTargetImputed = validationBuilt.TargetIsImputed[index];
             var isSourcedFromTraining = validationBuilt.TargetIsSourcedFromPriorSegment[index];
+            // Non-obvious but intentional: drop only validation targets imputed from training context
+            // (cross-split leakage), while keeping validation-to-validation imputations.
             var includeInPersistedDataset = !(isTargetImputed && isSourcedFromTraining);
 
             if (includeInPersistedDataset)
