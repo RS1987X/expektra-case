@@ -94,6 +94,8 @@ If your repo needs additional checks beyond what `verify.sh` runs by default, li
 - `dotnet build ExpekraCase.sln`
 - `dotnet test ExpekraCase.sln`
 - For implementation phases that change behavior, run a coverage pass after tests (for example `dotnet test ExpekraCase.sln --collect:"XPlat Code Coverage"`) and review coverage for touched modules.
+- For behavior-changing work, target **branch coverage >= 75% for touched modules** (or no regression from the module's existing baseline when legacy code is below target).
+  - If target cannot be met in the same change, document why in PR/delivery notes and create a follow-up item with concrete test additions.
 
 Do not mark work complete until the relevant tests and the full test command above pass.
 
