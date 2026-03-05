@@ -101,6 +101,52 @@ public class Part1PreprocessingTests
         }
     }
 
+    [Fact]
+    public void BuildPreprocessedDatasetForEvaluation_ExcludesOnlyTrainingSourcedImputedValidationTargetRows()
+    {
+        var dataPath = CreateTempFile(
+            """
+            utcTime;Target;Temperature;Windspeed;SolarIrradiation
+            2024-01-01 00:00;1,0;10,0;3,0;0,0
+            2024-01-10 00:00;;10,1;3,1;0,1
+            2024-01-20 00:00;2,0;10,2;3,2;0,2
+            2024-01-25 00:00;;10,25;3,25;0,25
+            2024-02-05 00:00;3,0;10,3;3,3;0,3
+            """);
+
+        var holidaysPath = CreateTempFile(
+            """
+            Id;Country;StartDate;EndDate;Type;RegionalScope;Name
+            123;SE;2024-01-01;;Public;National;SV Nyårsdagen
+            """);
+
+        try
+        {
+            var preprocessed = Part1Preprocessing.BuildPreprocessedDatasetForEvaluation(dataPath, holidaysPath);
+
+            Assert.Equal(new DateTime(2024, 1, 6, 0, 0, 0, DateTimeKind.Utc), preprocessed.ValidationStartUtc);
+            Assert.Equal(4, preprocessed.PersistedFeatures.Count);
+            Assert.DoesNotContain(preprocessed.PersistedFeatures, row => row.UtcTime == new DateTime(2024, 1, 10, 0, 0, 0, DateTimeKind.Utc));
+            Assert.Contains(preprocessed.PersistedFeatures, row => row.UtcTime == new DateTime(2024, 1, 25, 0, 0, 0, DateTimeKind.Utc));
+
+            Assert.Equal(5, preprocessed.AuditRows.Count);
+            var fromTrainingAudit = Assert.Single(preprocessed.AuditRows.Where(row => row.UtcTime == new DateTime(2024, 1, 10, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.True(fromTrainingAudit.IsValidation);
+            Assert.True(fromTrainingAudit.IsTargetImputed);
+            Assert.False(fromTrainingAudit.IncludedInPersistedDataset);
+
+            var withinValidationAudit = Assert.Single(preprocessed.AuditRows.Where(row => row.UtcTime == new DateTime(2024, 1, 25, 0, 0, 0, DateTimeKind.Utc)));
+            Assert.True(withinValidationAudit.IsValidation);
+            Assert.True(withinValidationAudit.IsTargetImputed);
+            Assert.True(withinValidationAudit.IncludedInPersistedDataset);
+        }
+        finally
+        {
+            File.Delete(dataPath);
+            File.Delete(holidaysPath);
+        }
+    }
+
     private static string CreateTempFile(string content)
     {
         var path = Path.Combine(Path.GetTempPath(), $"forecasting-test-{Guid.NewGuid():N}.csv");

@@ -24,11 +24,25 @@ public sealed record FeatureRow(
     double WeekdaySin,
     double WeekdayCos);
 
+public sealed record PreprocessingAuditRow(
+    DateTime UtcTime,
+    bool IsValidation,
+    bool IsTargetImputed,
+    bool IncludedInPersistedDataset);
+
+public sealed record PreprocessedDataset(
+    IReadOnlyList<FeatureRow> PersistedFeatures,
+    IReadOnlyList<PreprocessingAuditRow> AuditRows,
+    DateTime ValidationStartUtc);
+
 public static class Part1Preprocessing
 {
+    private const int ValidationWindowDays = 30;
     private static readonly CultureInfo SwedishCulture = CultureInfo.GetCultureInfo("sv-SE");
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
     private static readonly string[] AcceptedDateTimeFormats = ["yyyy-MM-dd HH:mm", "yyyy-MM-dd HH:mm:ss"];
+
+    private sealed record FilledValue(double Value, bool IsImputed, bool IsSourcedFromPriorSegment);
 
     public static IReadOnlyList<FeatureRow> BuildFeatureMatrix(string dataCsvPath, string holidaysCsvPath)
     {
@@ -69,6 +83,67 @@ public static class Part1Preprocessing
         }
 
         return result;
+    }
+
+    public static PreprocessedDataset BuildPreprocessedDatasetForEvaluation(string dataCsvPath, string holidaysCsvPath)
+    {
+        var rawRows = ReadRawDataRows(dataCsvPath).OrderBy(row => row.UtcTime).ToList();
+        if (rawRows.Count == 0)
+        {
+            return new PreprocessedDataset([], [], DateTime.MinValue);
+        }
+
+        var holidays = ReadSwedishPublicHolidays(holidaysCsvPath);
+        var validationStartUtc = rawRows[^1].UtcTime.AddDays(-ValidationWindowDays);
+
+        EnsureObservedBeforeValidation(rawRows, validationStartUtc, row => row.Target, "Target");
+        EnsureObservedBeforeValidation(rawRows, validationStartUtc, row => row.Temperature, "Temperature");
+        EnsureObservedBeforeValidation(rawRows, validationStartUtc, row => row.Windspeed, "Windspeed");
+        EnsureObservedBeforeValidation(rawRows, validationStartUtc, row => row.SolarIrradiation, "SolarIrradiation");
+
+        var trainRows = rawRows.Where(row => row.UtcTime < validationStartUtc).ToList();
+        var validationRows = rawRows.Where(row => row.UtcTime >= validationStartUtc).ToList();
+
+        var trainBuilt = BuildRowsWithTargetFlags(trainRows, holidays);
+
+        var lastObservedTrainingTarget = trainRows
+            .Where(row => row.Target.HasValue)
+            .Select(row => row.Target!.Value)
+            .Last();
+
+        var validationBuilt = BuildRowsWithTargetFlags(
+            validationRows,
+            holidays,
+            seedTargetFromPriorSegment: true,
+            priorSegmentTargetValue: lastObservedTrainingTarget);
+
+        var persistedFeatures = new List<FeatureRow>(trainBuilt.Features.Count + validationBuilt.Features.Count);
+        persistedFeatures.AddRange(trainBuilt.Features);
+
+        var auditRows = new List<PreprocessingAuditRow>(rawRows.Count);
+
+        for (var index = 0; index < trainBuilt.Features.Count; index++)
+        {
+            var row = trainBuilt.Features[index];
+            auditRows.Add(new PreprocessingAuditRow(row.UtcTime, false, trainBuilt.TargetIsImputed[index], true));
+        }
+
+        for (var index = 0; index < validationBuilt.Features.Count; index++)
+        {
+            var row = validationBuilt.Features[index];
+            var isTargetImputed = validationBuilt.TargetIsImputed[index];
+            var isSourcedFromTraining = validationBuilt.TargetIsSourcedFromPriorSegment[index];
+            var includeInPersistedDataset = !(isTargetImputed && isSourcedFromTraining);
+
+            if (includeInPersistedDataset)
+            {
+                persistedFeatures.Add(row);
+            }
+
+            auditRows.Add(new PreprocessingAuditRow(row.UtcTime, true, isTargetImputed, includeInPersistedDataset));
+        }
+
+        return new PreprocessedDataset(persistedFeatures, auditRows, validationStartUtc);
     }
 
     public static IReadOnlyCollection<DateOnly> ReadSwedishPublicHolidays(string holidaysCsvPath)
@@ -137,6 +212,27 @@ public static class Part1Preprocessing
         }
     }
 
+    public static void WritePreprocessingAuditCsv(IReadOnlyList<PreprocessingAuditRow> auditRows, string outputCsvPath)
+    {
+        var directory = Path.GetDirectoryName(outputCsvPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        using var writer = new StreamWriter(outputCsvPath, false);
+        writer.WriteLine("utcTime;IsValidation;IsTargetImputed;IncludedInPersistedDataset");
+
+        foreach (var row in auditRows)
+        {
+            writer.WriteLine(string.Join(';',
+                row.UtcTime.ToString("yyyy-MM-dd HH:mm:ss", InvariantCulture),
+                row.IsValidation.ToString(InvariantCulture),
+                row.IsTargetImputed.ToString(InvariantCulture),
+                row.IncludedInPersistedDataset.ToString(InvariantCulture)));
+        }
+    }
+
     public static IReadOnlyList<RawDataRow> ReadRawDataRows(string dataCsvPath)
     {
         var rows = new List<RawDataRow>();
@@ -182,40 +278,84 @@ public static class Part1Preprocessing
 
     public static IReadOnlyList<double> ForwardFillTargets(IReadOnlyList<double?> targets)
     {
-        var firstKnownIndex = -1;
-        for (var index = 0; index < targets.Count; index++)
-        {
-            if (targets[index].HasValue)
-            {
-                firstKnownIndex = index;
-                break;
-            }
-        }
-
-        if (firstKnownIndex < 0)
-        {
-            throw new InvalidOperationException("Target column has no valid values to forward-fill.");
-        }
-
-        // Non-obvious but intentional: we seed leading nulls with the first valid future value,
-        // then do a normal forward-fill for all subsequent nulls.
-        var filled = new List<double>(targets.Count);
-        var previous = targets[firstKnownIndex]!.Value;
-
-        for (var index = 0; index < targets.Count; index++)
-        {
-            if (targets[index].HasValue)
-            {
-                previous = targets[index]!.Value;
-            }
-
-            filled.Add(previous);
-        }
-
-        return filled;
+        return ForwardFillWithImputationFlags(targets, "Target")
+            .Select(value => value.Value)
+            .ToList();
     }
 
     private static IReadOnlyList<double> ForwardFillRequiredSeries(IReadOnlyList<double?> values, string columnName)
+    {
+        return ForwardFillWithImputationFlags(values, columnName)
+            .Select(value => value.Value)
+            .ToList();
+    }
+
+    private static (
+        IReadOnlyList<FeatureRow> Features,
+        IReadOnlyList<bool> TargetIsImputed,
+        IReadOnlyList<bool> TargetIsSourcedFromPriorSegment) BuildRowsWithTargetFlags(
+        IReadOnlyList<RawDataRow> rows,
+        IReadOnlyCollection<DateOnly> holidays,
+        bool seedTargetFromPriorSegment = false,
+        double priorSegmentTargetValue = 0d)
+    {
+        if (rows.Count == 0)
+        {
+            return ([], [], []);
+        }
+
+        var targetFilled = ForwardFillWithImputationFlags(
+            rows.Select(row => row.Target).ToList(),
+            "Target",
+            seedFromPriorSegment: seedTargetFromPriorSegment,
+            priorSegmentValue: priorSegmentTargetValue);
+        var temperatures = ForwardFillRequiredSeries(rows.Select(row => row.Temperature).ToList(), "Temperature");
+        var windspeeds = ForwardFillRequiredSeries(rows.Select(row => row.Windspeed).ToList(), "Windspeed");
+        var solarIrradiations = ForwardFillRequiredSeries(rows.Select(row => row.SolarIrradiation).ToList(), "SolarIrradiation");
+
+        var result = new List<FeatureRow>(rows.Count);
+        var targetIsImputed = new List<bool>(rows.Count);
+        var targetIsSourcedFromPriorSegment = new List<bool>(rows.Count);
+
+        for (var index = 0; index < rows.Count; index++)
+        {
+            var row = rows[index];
+            var target = targetFilled[index].Value;
+
+            var hour = row.UtcTime.Hour;
+            var minute = row.UtcTime.Minute;
+            var dayOfWeek = (int)row.UtcTime.DayOfWeek;
+
+            var hourAngle = 2d * Math.PI * (hour / 24d);
+            var weekdayAngle = 2d * Math.PI * (dayOfWeek / 7d);
+
+            result.Add(new FeatureRow(
+                row.UtcTime,
+                target,
+                temperatures[index],
+                windspeeds[index],
+                solarIrradiations[index],
+                hour,
+                minute,
+                dayOfWeek,
+                holidays.Contains(DateOnly.FromDateTime(row.UtcTime)),
+                Math.Sin(hourAngle),
+                Math.Cos(hourAngle),
+                Math.Sin(weekdayAngle),
+                Math.Cos(weekdayAngle)));
+
+            targetIsImputed.Add(targetFilled[index].IsImputed);
+            targetIsSourcedFromPriorSegment.Add(targetFilled[index].IsSourcedFromPriorSegment);
+        }
+
+        return (result, targetIsImputed, targetIsSourcedFromPriorSegment);
+    }
+
+    private static IReadOnlyList<FilledValue> ForwardFillWithImputationFlags(
+        IReadOnlyList<double?> values,
+        string columnName,
+        bool seedFromPriorSegment = false,
+        double priorSegmentValue = 0d)
     {
         var firstKnownIndex = -1;
         for (var index = 0; index < values.Count; index++)
@@ -229,25 +369,53 @@ public static class Part1Preprocessing
 
         if (firstKnownIndex < 0)
         {
-            throw new InvalidOperationException($"{columnName} column has no valid values to forward-fill.");
+            if (!seedFromPriorSegment)
+            {
+                throw new InvalidOperationException($"{columnName} column has no valid values to forward-fill.");
+            }
+
+            firstKnownIndex = values.Count;
         }
 
-        // Non-obvious but intentional: for sparse operational telemetry, we seed leading nulls with
-        // the first known future value, then continue with regular forward-fill.
-        var filled = new List<double>(values.Count);
-        var previous = values[firstKnownIndex]!.Value;
+        // Non-obvious but intentional: we seed leading nulls with the first known future value,
+        // then continue with regular forward-fill.
+        var filled = new List<FilledValue>(values.Count);
+        var previous = seedFromPriorSegment
+            ? priorSegmentValue
+            : values[firstKnownIndex]!.Value;
+        var sourceFromPriorSegment = seedFromPriorSegment;
 
         for (var index = 0; index < values.Count; index++)
         {
+            var isImputed = !values[index].HasValue;
             if (values[index].HasValue)
             {
                 previous = values[index]!.Value;
+                sourceFromPriorSegment = false;
+            }
+            else if (!seedFromPriorSegment && index >= firstKnownIndex)
+            {
+                sourceFromPriorSegment = false;
             }
 
-            filled.Add(previous);
+            filled.Add(new FilledValue(previous, isImputed, isImputed && sourceFromPriorSegment));
         }
 
         return filled;
+    }
+
+    private static void EnsureObservedBeforeValidation(
+        IReadOnlyList<RawDataRow> rows,
+        DateTime validationStartUtc,
+        Func<RawDataRow, double?> selector,
+        string columnName)
+    {
+        var hasObservedValueBeforeValidation = rows.Any(row => row.UtcTime < validationStartUtc && selector(row).HasValue);
+        if (!hasObservedValueBeforeValidation)
+        {
+            throw new InvalidOperationException(
+                $"{columnName} has no observed values before validation start ({validationStartUtc:yyyy-MM-dd HH:mm:ss} UTC).");
+        }
     }
 
     private static double? ParseNullableDouble(string value, int lineNumber, string columnName)
