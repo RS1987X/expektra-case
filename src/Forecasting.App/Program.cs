@@ -8,6 +8,11 @@ var auditOutputPath = args.Length > 3
 	: Path.Combine(
 		Path.GetDirectoryName(outputPath) ?? "artifacts",
 		$"{Path.GetFileNameWithoutExtension(outputPath)}.audit.csv");
+var auditSummaryOutputPath = args.Length > 4
+	? args[4]
+	: Path.Combine(
+		Path.GetDirectoryName(outputPath) ?? "artifacts",
+		$"{Path.GetFileNameWithoutExtension(outputPath)}.audit.summary.json");
 
 if (!File.Exists(dataPath) || !File.Exists(holidaysPath))
 {
@@ -19,8 +24,10 @@ if (!File.Exists(dataPath) || !File.Exists(holidaysPath))
 
 var preprocessed = Part1Preprocessing.BuildPreprocessedDatasetForEvaluation(dataPath, holidaysPath);
 Part1Preprocessing.WriteFeatureMatrixCsv(preprocessed.PersistedFeatures, outputPath);
-Part1Preprocessing.WritePreprocessingAuditCsv(preprocessed.AuditRows, auditOutputPath);
-Console.WriteLine($"Validation split starts at: {preprocessed.ValidationStartUtc:yyyy-MM-dd HH:mm:ss} UTC");
+Part1Preprocessing.WritePreprocessingAuditCsv(preprocessed.AuditEvents, auditOutputPath);
+Part1Preprocessing.WritePreprocessingSummaryJson(preprocessed.AuditSummary, auditSummaryOutputPath);
+Console.WriteLine($"Validation split starts at: {preprocessed.AuditSummary.ValidationStartUtc:yyyy-MM-dd HH:mm:ss} UTC");
 Console.WriteLine($"Generated {preprocessed.PersistedFeatures.Count} persisted feature rows.");
 Console.WriteLine($"Saved feature matrix to: {outputPath}");
-Console.WriteLine($"Saved preprocessing audit to: {auditOutputPath}");
+Console.WriteLine($"Saved preprocessing audit events to: {auditOutputPath}");
+Console.WriteLine($"Saved preprocessing summary to: {auditSummaryOutputPath}");

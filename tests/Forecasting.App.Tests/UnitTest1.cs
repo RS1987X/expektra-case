@@ -124,21 +124,23 @@ public class Part1PreprocessingTests
         {
             var preprocessed = Part1Preprocessing.BuildPreprocessedDatasetForEvaluation(dataPath, holidaysPath);
 
-            Assert.Equal(new DateTime(2024, 1, 6, 0, 0, 0, DateTimeKind.Utc), preprocessed.ValidationStartUtc);
+            Assert.Equal(new DateTime(2024, 1, 6, 0, 0, 0, DateTimeKind.Utc), preprocessed.AuditSummary.ValidationStartUtc);
             Assert.Equal(4, preprocessed.PersistedFeatures.Count);
             Assert.DoesNotContain(preprocessed.PersistedFeatures, row => row.UtcTime == new DateTime(2024, 1, 10, 0, 0, 0, DateTimeKind.Utc));
             Assert.Contains(preprocessed.PersistedFeatures, row => row.UtcTime == new DateTime(2024, 1, 25, 0, 0, 0, DateTimeKind.Utc));
 
-            Assert.Equal(5, preprocessed.AuditRows.Count);
-            var fromTrainingAudit = Assert.Single(preprocessed.AuditRows.Where(row => row.UtcTime == new DateTime(2024, 1, 10, 0, 0, 0, DateTimeKind.Utc)));
-            Assert.True(fromTrainingAudit.IsValidation);
-            Assert.True(fromTrainingAudit.IsTargetImputed);
-            Assert.False(fromTrainingAudit.IncludedInPersistedDataset);
+            var droppedEvent = Assert.Single(preprocessed.AuditEvents);
+            Assert.Equal(new DateTime(2024, 1, 10, 0, 0, 0, DateTimeKind.Utc), droppedEvent.UtcTime);
+            Assert.Equal("ValidationRowDropped", droppedEvent.EventType);
+            Assert.True(droppedEvent.IsValidation);
+            Assert.True(droppedEvent.IsTargetImputed);
+            Assert.Equal("Training", droppedEvent.ImputationSource);
 
-            var withinValidationAudit = Assert.Single(preprocessed.AuditRows.Where(row => row.UtcTime == new DateTime(2024, 1, 25, 0, 0, 0, DateTimeKind.Utc)));
-            Assert.True(withinValidationAudit.IsValidation);
-            Assert.True(withinValidationAudit.IsTargetImputed);
-            Assert.True(withinValidationAudit.IncludedInPersistedDataset);
+            Assert.Equal(5, preprocessed.AuditSummary.TotalRows);
+            Assert.Equal(1, preprocessed.AuditSummary.TrainingRows);
+            Assert.Equal(4, preprocessed.AuditSummary.ValidationRows);
+            Assert.Equal(4, preprocessed.AuditSummary.PersistedRows);
+            Assert.Equal(1, preprocessed.AuditSummary.DroppedValidationRowsFromTrainingImputation);
         }
         finally
         {

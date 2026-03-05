@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 
 namespace Forecasting.App;
 
@@ -24,16 +25,26 @@ public sealed record FeatureRow(
     double WeekdaySin,
     double WeekdayCos);
 
-public sealed record PreprocessingAuditRow(
+public sealed record PreprocessingAuditEvent(
     DateTime UtcTime,
+    string EventType,
+    string Reason,
     bool IsValidation,
     bool IsTargetImputed,
-    bool IncludedInPersistedDataset);
+    string ImputationSource);
+
+public sealed record PreprocessingAuditSummary(
+    DateTime ValidationStartUtc,
+    int TotalRows,
+    int TrainingRows,
+    int ValidationRows,
+    int PersistedRows,
+    int DroppedValidationRowsFromTrainingImputation);
 
 public sealed record PreprocessedDataset(
     IReadOnlyList<FeatureRow> PersistedFeatures,
-    IReadOnlyList<PreprocessingAuditRow> AuditRows,
-    DateTime ValidationStartUtc);
+    IReadOnlyList<PreprocessingAuditEvent> AuditEvents,
+    PreprocessingAuditSummary AuditSummary);
 
 public static class Part1Preprocessing
 {
@@ -90,7 +101,8 @@ public static class Part1Preprocessing
         var rawRows = ReadRawDataRows(dataCsvPath).OrderBy(row => row.UtcTime).ToList();
         if (rawRows.Count == 0)
         {
-            return new PreprocessedDataset([], [], DateTime.MinValue);
+            var emptySummary = new PreprocessingAuditSummary(DateTime.MinValue, 0, 0, 0, 0, 0);
+            return new PreprocessedDataset([], [], emptySummary);
         }
 
         var holidays = ReadSwedishPublicHolidays(holidaysCsvPath);
@@ -101,6 +113,9 @@ public static class Part1Preprocessing
         EnsureObservedBeforeValidation(rawRows, validationStartUtc, row => row.Windspeed, "Windspeed");
         EnsureObservedBeforeValidation(rawRows, validationStartUtc, row => row.SolarIrradiation, "SolarIrradiation");
 
+
+        // Non-obvious but intentional: we split the dataset into training and validation segments, then apply forward-fill imputation separately,
+        // seeding the validation segment with the last observed training target to avoid leakage from training to validation.
         var trainRows = rawRows.Where(row => row.UtcTime < validationStartUtc).ToList();
         var validationRows = rawRows.Where(row => row.UtcTime >= validationStartUtc).ToList();
 
@@ -120,13 +135,8 @@ public static class Part1Preprocessing
         var persistedFeatures = new List<FeatureRow>(trainBuilt.Features.Count + validationBuilt.Features.Count);
         persistedFeatures.AddRange(trainBuilt.Features);
 
-        var auditRows = new List<PreprocessingAuditRow>(rawRows.Count);
-
-        for (var index = 0; index < trainBuilt.Features.Count; index++)
-        {
-            var row = trainBuilt.Features[index];
-            auditRows.Add(new PreprocessingAuditRow(row.UtcTime, false, trainBuilt.TargetIsImputed[index], true));
-        }
+        var auditEvents = new List<PreprocessingAuditEvent>();
+        var droppedValidationRows = 0;
 
         for (var index = 0; index < validationBuilt.Features.Count; index++)
         {
@@ -141,11 +151,28 @@ public static class Part1Preprocessing
             {
                 persistedFeatures.Add(row);
             }
-
-            auditRows.Add(new PreprocessingAuditRow(row.UtcTime, true, isTargetImputed, includeInPersistedDataset));
+            else
+            {
+                droppedValidationRows++;
+                auditEvents.Add(new PreprocessingAuditEvent(
+                    row.UtcTime,
+                    "ValidationRowDropped",
+                    "Target was imputed from training context.",
+                    true,
+                    true,
+                    "Training"));
+            }
         }
 
-        return new PreprocessedDataset(persistedFeatures, auditRows, validationStartUtc);
+        var summary = new PreprocessingAuditSummary(
+            validationStartUtc,
+            rawRows.Count,
+            trainRows.Count,
+            validationRows.Count,
+            persistedFeatures.Count,
+            droppedValidationRows);
+
+        return new PreprocessedDataset(persistedFeatures, auditEvents, summary);
     }
 
     public static IReadOnlyCollection<DateOnly> ReadSwedishPublicHolidays(string holidaysCsvPath)
@@ -214,7 +241,7 @@ public static class Part1Preprocessing
         }
     }
 
-    public static void WritePreprocessingAuditCsv(IReadOnlyList<PreprocessingAuditRow> auditRows, string outputCsvPath)
+    public static void WritePreprocessingAuditCsv(IReadOnlyList<PreprocessingAuditEvent> auditEvents, string outputCsvPath)
     {
         var directory = Path.GetDirectoryName(outputCsvPath);
         if (!string.IsNullOrWhiteSpace(directory))
@@ -223,16 +250,30 @@ public static class Part1Preprocessing
         }
 
         using var writer = new StreamWriter(outputCsvPath, false);
-        writer.WriteLine("utcTime;IsValidation;IsTargetImputed;IncludedInPersistedDataset");
+        writer.WriteLine("utcTime;EventType;Reason;IsValidation;IsTargetImputed;ImputationSource");
 
-        foreach (var row in auditRows)
+        foreach (var row in auditEvents)
         {
             writer.WriteLine(string.Join(';',
                 row.UtcTime.ToString("yyyy-MM-dd HH:mm:ss", InvariantCulture),
+                row.EventType,
+                row.Reason,
                 row.IsValidation.ToString(InvariantCulture),
                 row.IsTargetImputed.ToString(InvariantCulture),
-                row.IncludedInPersistedDataset.ToString(InvariantCulture)));
+                row.ImputationSource));
         }
+    }
+
+    public static void WritePreprocessingSummaryJson(PreprocessingAuditSummary summary, string outputJsonPath)
+    {
+        var directory = Path.GetDirectoryName(outputJsonPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var json = JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(outputJsonPath, json);
     }
 
     public static IReadOnlyList<RawDataRow> ReadRawDataRows(string dataCsvPath)
