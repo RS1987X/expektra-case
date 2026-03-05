@@ -1,3 +1,8 @@
 data/
 docs/**/*.pdf
 artifacts/
+**/bin/
+**/obj/
+**/TestResults/
+**/*.coverage
+**/coverage.cobertura.xml
