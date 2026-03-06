@@ -57,13 +57,19 @@ public sealed record DiagnosticsSamplePoint(
     double Actual,
     double Residual);
 
+public sealed record DiagnosticsTargetPoint(
+    DateTime AnchorUtcTime,
+    string Split,
+    double TargetAtT);
+
 public sealed record DiagnosticsRunResult(
     DateTime GeneratedAtUtc,
     IReadOnlyList<DiagnosticsPreModelSummary> PreModelSummaries,
     IReadOnlyList<DiagnosticsCadenceSummary> CadenceSummaries,
     IReadOnlyList<DiagnosticsResidualSummary> ResidualSummaries,
     IReadOnlyList<DiagnosticsHorizonBucketSummary> HorizonBucketSummaries,
-    IReadOnlyList<DiagnosticsSamplePoint> SamplePoints);
+    IReadOnlyList<DiagnosticsSamplePoint> SamplePoints,
+    IReadOnlyList<DiagnosticsTargetPoint> TargetSeries);
 
 public static class PartDiagnostics
 {
@@ -120,6 +126,10 @@ public static class PartDiagnostics
         var residualSummaries = BuildResidualSummaries(predictions, actualLookup);
         var bucketSummaries = BuildHorizonBucketSummaries(predictions, actualLookup);
         var samplePoints = BuildSamplePoints(predictions, actualLookup);
+        var targetSeries = rows
+            .OrderBy(row => row.AnchorUtcTime)
+            .Select(row => new DiagnosticsTargetPoint(row.AnchorUtcTime, NormalizeSplit(row.Split), row.TargetAtT))
+            .ToList();
 
         return new DiagnosticsRunResult(
             DateTime.UtcNow,
@@ -127,7 +137,8 @@ public static class PartDiagnostics
             cadence,
             residualSummaries,
             bucketSummaries,
-            samplePoints);
+            samplePoints,
+            targetSeries);
     }
 
     public static void WriteArtifacts(DiagnosticsRunResult result, string outputDirectory)
@@ -263,6 +274,7 @@ public static class PartDiagnostics
         sb.AppendLine("</head><body>");
         sb.AppendLine($"<h1>Forecast diagnostics</h1><p>Generated UTC: {result.GeneratedAtUtc:yyyy-MM-dd HH:mm:ss}</p>");
 
+        AppendTargetSeriesPlot(sb, result.TargetSeries);
         AppendPreModelTable(sb, result.PreModelSummaries);
         AppendCadenceTable(sb, result.CadenceSummaries);
         AppendResidualTable(sb, result.ResidualSummaries);
@@ -694,6 +706,53 @@ public static class PartDiagnostics
         sb.AppendLine("</tbody></table>");
     }
 
+    private static void AppendTargetSeriesPlot(StringBuilder sb, IReadOnlyList<DiagnosticsTargetPoint> targetSeries)
+    {
+        sb.AppendLine("<h2>Target over time (TargetAtT)</h2>");
+
+        if (targetSeries.Count == 0)
+        {
+            sb.AppendLine("<p>No target points available.</p>");
+            return;
+        }
+
+        var ordered = targetSeries.OrderBy(point => point.AnchorUtcTime).ToList();
+        var minY = ordered.Min(point => point.TargetAtT);
+        var maxY = ordered.Max(point => point.TargetAtT);
+        if (Math.Abs(maxY - minY) < 1e-9)
+        {
+            maxY = minY + 1d;
+        }
+
+        sb.AppendLine("<svg viewBox=\"0 0 960 260\" width=\"960\" height=\"260\" role=\"img\" aria-label=\"Target over time\">");
+        sb.AppendLine("<line x1=\"40\" y1=\"220\" x2=\"920\" y2=\"220\" stroke=\"#444\" />");
+        sb.AppendLine("<line x1=\"40\" y1=\"20\" x2=\"40\" y2=\"220\" stroke=\"#444\" />");
+
+        var indexedSeries = ordered
+            .Select((point, index) => new { Point = point, Index = index + 1 })
+            .ToList();
+
+        var splitGroups = indexedSeries
+            .GroupBy(item => item.Point.Split)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .ToList();
+
+        var splitIndex = 0;
+        foreach (var splitGroup in splitGroups)
+        {
+            var points = splitGroup
+                .Select(item => (item.Index, item.Point.TargetAtT))
+                .ToList();
+
+            var polyline = BuildIndexedPolyline(points, minY, maxY, ordered.Count);
+            sb.AppendLine($"<polyline points=\"{polyline}\" fill=\"none\" stroke=\"hsl({(splitIndex * 127) % 360} 70% 40%)\" stroke-width=\"1.8\" />");
+            splitIndex++;
+        }
+
+        sb.AppendLine("</svg>");
+        sb.AppendLine($"<p><strong>Splits:</strong> {string.Join(", ", splitGroups.Select(group => Escape(group.Key)))}.</p>");
+    }
+
     private static void AppendCadenceTable(StringBuilder sb, IReadOnlyList<DiagnosticsCadenceSummary> summaries)
     {
         sb.AppendLine("<h2>Cadence & missingness</h2>");
@@ -807,6 +866,28 @@ public static class PartDiagnostics
         return string.Join(' ', points.Select(point =>
         {
             var x = xMin + (point.XStep - 1d) / (maxStep - 1d) * (xMax - xMin);
+            var normalized = (point.YValue - minY) / (maxY - minY);
+            var y = yMax - normalized * (yMax - yMin);
+            return $"{x.ToString("F2", InvariantCulture)},{y.ToString("F2", InvariantCulture)}";
+        }));
+    }
+
+    private static string BuildIndexedPolyline(IReadOnlyList<(int XIndex, double YValue)> points, double minY, double maxY, int maxIndex)
+    {
+        if (points.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        const double xMin = 40d;
+        const double xMax = 920d;
+        const double yMin = 20d;
+        const double yMax = 220d;
+
+        var denominator = Math.Max(1d, maxIndex - 1d);
+        return string.Join(' ', points.Select(point =>
+        {
+            var x = xMin + (point.XIndex - 1d) / denominator * (xMax - xMin);
             var normalized = (point.YValue - minY) / (maxY - minY);
             var y = yMax - normalized * (yMax - yMin);
             return $"{x.ToString("F2", InvariantCulture)},{y.ToString("F2", InvariantCulture)}";

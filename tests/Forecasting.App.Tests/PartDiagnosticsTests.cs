@@ -123,6 +123,7 @@ public class PartDiagnosticsTests
 
             var html = File.ReadAllText(Path.Combine(outputDir, "diagnostics_report.html"));
             Assert.Contains("<svg", html);
+            Assert.Contains("Target over time (TargetAtT)", html);
             Assert.Contains("Predicted vs actual sampled anchors", html);
         }
         finally
