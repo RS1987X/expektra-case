@@ -317,3 +317,109 @@ With these defaults, Part 3 implementation ambiguities are considered resolved u
 - `dotnet test ExpekraCase.sln`
 - `dotnet test ExpekraCase.sln --collect:"XPlat Code Coverage"`
 - `dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part3 <part2_input_csv> <predictions_output_csv> <summary_output_json>`
+
+## Part 4 (Del 4) – Evaluation
+
+### Goal
+
+Implement a deterministic evaluation slice for the Part 3 model outputs on the validation period, including standard error metrics and a simple model-comparison table.
+
+### Assumptions
+
+- Input predictions are produced by Part 3 from `artifacts/part3_predictions.csv`.
+- Ground truth comes from `artifacts/part2_supervised_matrix.csv` (validation anchors and their horizon targets).
+- Validation period follows the existing split policy (last 30 days).
+- Evaluation horizon remains `192` steps (48h at 15-minute resolution), and includes every step from `t+1` through `t+192` (not endpoint-only), aligned with Parts 2–3.
+
+### In scope
+
+1. Evaluate predictions on validation anchors only.
+2. Compute per-model aggregate metrics:
+	- MAE (Mean Absolute Error)
+	- RMSE (Root Mean Squared Error)
+	- MAPE (Mean Absolute Percentage Error)
+3. Produce a compact model-comparison table (console and/or artifact).
+4. Persist a 48h sample view of predicted vs actual values for inspection.
+
+### Out of scope
+
+- New model training methods or major Part 3 architecture changes.
+- Hyperparameter search/optimization loops.
+- Full reporting/dashboard system.
+
+### Ambiguity-resolving definitions
+
+- Evaluation unit is each available `(anchor, horizonStep)` pair in validation where both prediction and actual exist.
+- Aggregate metrics are computed with micro-averaging across all evaluated points per model (not per-anchor-first averaging).
+- Prediction/actual alignment uses deterministic keys: `ModelName`, `AnchorUtc`, and `HorizonStep` on prediction side joined to `AnchorUtc` + horizon index on ground-truth side.
+- Duplicate prediction keys are invalid input; fail fast with a clear error instead of arbitrarily selecting one row.
+- RMSE uses squared error mean over evaluated points and then square root.
+- MAPE excludes rows where `actual == 0` from denominator-based computation and reports the effective sample count used.
+- If a model has no evaluable rows, fail fast with a clear error.
+- Persisted numeric metrics use deterministic formatting (InvariantCulture with fixed precision) so repeated runs produce stable artifact diffs.
+- “Predicted vs actual for 48h” is implemented as a deterministic 192-step window sample from validation (for example first validation anchor), persisted to artifact.
+
+### Deliverables
+
+1. Part 4 evaluator implementation (read predictions + actuals, compute metrics).
+2. Persisted summary artifact with per-model MAE/RMSE/MAPE and counts.
+3. Persisted 48h predicted-vs-actual sample artifact.
+4. CLI wiring for `part4` execution mode.
+5. Tests for metric correctness and output contract.
+
+### Proposed code structure
+
+- `src/Forecasting.App/Part4Evaluation.cs`
+	- evaluation DTOs and metric computation
+	- artifact writers for summary and 48h sample
+- `src/Forecasting.App/Program.cs`
+	- add `part4` mode to run evaluation pipeline
+- `tests/Forecasting.App.Tests/Part4EvaluationTests.cs`
+	- metric formula tests and artifact shape/contract checks
+
+### Implementation steps
+
+1. Define evaluation DTOs/contracts
+	- prediction point, actual point, per-model metric summary
+2. Implement join/alignment logic
+	- match prediction rows to actuals by anchor timestamp and horizon step
+	- restrict to validation rows only
+	- build an indexed ground-truth lookup once (keyed by `AnchorUtc` + `HorizonStep`) and evaluate predictions in a single streaming pass to avoid repeated joins
+3. Implement metrics
+	- MAE, RMSE, MAPE (+ MAPE denominator count)
+4. Add artifact outputs
+	- model comparison summary (JSON/CSV)
+	- deterministic 48h predicted-vs-actual sample file
+5. Add CLI mode + tests
+	- `part4` command path in `Program.cs`
+	- unit tests for formulas, filtering, and output schema
+
+### Done criteria
+
+- [ ] Part 4 evaluation runs from CLI without manual setup.
+- [ ] MAE, RMSE, and MAPE are computed for each model on validation data.
+- [ ] Model comparison output is persisted and easily inspectable.
+- [ ] A deterministic 48h predicted-vs-actual sample artifact is persisted.
+- [ ] MAPE zero-denominator handling is explicit and test-covered.
+- [ ] Part 4 tests pass and verify metric/output contracts.
+
+### Test cases (minimum)
+
+1. Metric correctness (small synthetic set)
+	- verify MAE, RMSE, and MAPE against hand-calculated expected values
+2. MAPE zero handling
+	- rows with `actual == 0` are excluded from MAPE denominator and counted
+3. Alignment and filtering
+	- only validation anchors are included; missing pairs are skipped deterministically
+4. Output contracts
+	- summary artifact contains expected per-model fields
+	- 48h sample artifact contains ordered horizon points with predicted + actual values
+
+### Verification (Verifiering)
+
+- `dotnet restore ExpekraCase.sln`
+- `dotnet build ExpekraCase.sln`
+- `dotnet test ExpekraCase.sln`
+- `dotnet test ExpekraCase.sln --collect:"XPlat Code Coverage"`
+- `dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part3 <part2_input_csv> <predictions_output_csv> <summary_output_json>`
+- `dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part4 <part2_input_csv> <part3_predictions_csv> <part4_metrics_output> <part4_sample_output>`
