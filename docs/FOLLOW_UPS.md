@@ -34,5 +34,5 @@
 - Follow-up action: clarify fallback counters/labels so baseline fallback reporting is not named `ExogenousFallbackSteps` (separate seasonal-key fallback vs exogenous fallback semantics).
 - Follow-up action: persist Part 3 fallback telemetry in artifacts (for example non-finite score fallback to `targetAtT`, exogenous carry-forward fallback, and lag/lookup fallback counts) so users can audit how often safeguards were applied.
 - Follow-up action: split Part 3 summary fallback counters by model semantics (for example `SeasonalKeyFallbackSteps` for baseline and `ExogenousCarryForwardFallbackSteps` / `NonFiniteScoreFallbackSteps` for FastTree) instead of a shared `ExogenousFallbackSteps` label.
-- Follow-up action: persist Part 3 FastTree feature-importance scores (for example model-native importance and/or permutation feature importance) to an artifact so feature influence is inspectable.
+- Follow-up action: persist Part 3 FastTree feature-importance scores based on out-of-sample performance (for example holdout/backtest permutation feature importance, not training-fit-only importance) to an artifact so feature influence is inspectable.
 - Follow-up action: consider streaming prediction writes for large validation sets to avoid retaining all forecast rows in memory before CSV persistence.
