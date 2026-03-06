@@ -77,6 +77,7 @@ public static class Part1Preprocessing
             var minute = row.UtcTime.Minute;
             var dayOfWeek = (int)row.UtcTime.DayOfWeek;
 
+            // Encode hour/day-of-week as sin/cos cycles so boundary neighbors stay close (23↔0, Sunday↔Monday).
             var hourAngle = 2d * Math.PI * (hour / 24d);
             var weekdayAngle = 2d * Math.PI * (dayOfWeek / 7d);
 
@@ -376,6 +377,7 @@ public static class Part1Preprocessing
             var minute = row.UtcTime.Minute;
             var dayOfWeek = (int)row.UtcTime.DayOfWeek;
 
+            // Encode hour/day-of-week as sin/cos cycles so boundary neighbors stay close (23↔0, Sunday↔Monday).
             var hourAngle = 2d * Math.PI * (hour / 24d);
             var weekdayAngle = 2d * Math.PI * (dayOfWeek / 7d);
 

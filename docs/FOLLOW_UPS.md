@@ -24,3 +24,15 @@
 - DONE (2026-03-06): add targeted Part 2 tests for split-boundary behavior, including explicit train-anchor coverage and deterministic assertions around the purge zone near validation start.
 - Follow-up action: add explicit continuity validation for Part 2 input cadence (expected 15-minute step); fail fast or clearly report when timestamp gaps/irregular intervals would break index-based lag/horizon semantics.
 - Follow-up action: remove or repurpose currently unused `MinutesPerStep` constant in Part 2 implementation to keep the module intentional and warning-free.
+
+## Part 3 follow-up
+
+- DONE (2026-03-06): raise branch coverage for `Part3Modeling` to repository target; latest coverage run reports branch-rate ~92.64% for `Part3Modeling` with targeted tests for parsing failures, split guards, and fallback branches.
+- DONE (2026-03-06): optimize recursive inference lookups by replacing repeated LINQ scans in `GetValueAtOrBefore` with indexed history state and binary-search lookup.
+- DONE (2026-03-06): optimize rolling feature computation by maintaining incremental rolling sums / sums-of-squares for 16/96-step windows.
+- DONE (2026-03-06): remove unused `allRows` parameter from `PredictWithFastTreeRecursive` and related dead paths.
+- Follow-up action: clarify fallback counters/labels so baseline fallback reporting is not named `ExogenousFallbackSteps` (separate seasonal-key fallback vs exogenous fallback semantics).
+- Follow-up action: persist Part 3 fallback telemetry in artifacts (for example non-finite score fallback to `targetAtT`, exogenous carry-forward fallback, and lag/lookup fallback counts) so users can audit how often safeguards were applied.
+- Follow-up action: split Part 3 summary fallback counters by model semantics (for example `SeasonalKeyFallbackSteps` for baseline and `ExogenousCarryForwardFallbackSteps` / `NonFiniteScoreFallbackSteps` for FastTree) instead of a shared `ExogenousFallbackSteps` label.
+- Follow-up action: persist Part 3 FastTree feature-importance scores (for example model-native importance and/or permutation feature importance) to an artifact so feature influence is inspectable.
+- Follow-up action: consider streaming prediction writes for large validation sets to avoid retaining all forecast rows in memory before CSV persistence.

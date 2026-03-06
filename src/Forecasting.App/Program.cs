@@ -1,5 +1,34 @@
 ﻿using Forecasting.App;
 
+if (args.Length > 0 && string.Equals(args[0], "part3", StringComparison.OrdinalIgnoreCase))
+{
+	var part3InputPath = args.Length > 1 ? args[1] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
+	var part3OutputPath = args.Length > 2 ? args[2] : Path.Combine("artifacts", "part3_predictions.csv");
+	var part3SummaryPath = args.Length > 3
+		? args[3]
+		: Path.Combine(
+			Path.GetDirectoryName(part3OutputPath) ?? "artifacts",
+			$"{Path.GetFileNameWithoutExtension(part3OutputPath)}.summary.json");
+
+	if (!File.Exists(part3InputPath))
+	{
+		Console.WriteLine("Part 3 input file not found.");
+		Console.WriteLine($"Input path: {part3InputPath}");
+		return;
+	}
+
+	var part3Rows = Part3Modeling.ReadPart2DatasetCsv(part3InputPath);
+	var part3Result = Part3Modeling.RunModels(part3Rows);
+	Part3Modeling.WriteForecastsCsv(part3Result.Forecasts, part3OutputPath);
+	Part3Modeling.WriteSummaryJson(part3Result.Summary, part3SummaryPath);
+
+	Console.WriteLine($"Part 3 models: {string.Join(", ", part3Result.Summary.Models.Select(model => model.ModelName))}");
+	Console.WriteLine($"Generated {part3Result.Forecasts.Count} forecast rows.");
+	Console.WriteLine($"Saved Part 3 predictions to: {part3OutputPath}");
+	Console.WriteLine($"Saved Part 3 summary to: {part3SummaryPath}");
+	return;
+}
+
 if (args.Length > 0 && string.Equals(args[0], "part2", StringComparison.OrdinalIgnoreCase))
 {
 	var part2InputPath = args.Length > 1 ? args[1] : Path.Combine("artifacts", "part1_feature_matrix.csv");

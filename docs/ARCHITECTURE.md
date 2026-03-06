@@ -6,6 +6,7 @@ This document describes the current implementation architecture for:
 
 - Part 1 preprocessing and leakage-safe evaluation preparation
 - Part 2 feature engineering and multi-step supervised dataset generation
+- Part 3 forecasting (baseline + ML.NET FastTree recursive inference)
 
 The solution is implemented in .NET 10 under `src/Forecasting.App` and verified with tests in `tests/Forecasting.App.Tests`.
 
@@ -27,6 +28,16 @@ The solution is implemented in .NET 10 under `src/Forecasting.App` and verified 
 	- Key outputs:
 		- `Part2SupervisedRow` matrix
 		- `Part2DatasetSummary` JSON
+- `Part3Modeling.cs`
+	- Functional core for Part 3 model training and validation forecasting.
+	- Models:
+		- Seasonal baseline (`BaselineSeasonal`)
+		- ML.NET FastTree recursive one-step model (`FastTreeRecursive`)
+	- Key outputs:
+		- `Part3ForecastRow` prediction matrix
+		- `Part3RunSummary` JSON
+	- Runtime optimization:
+		- Indexed history lookups + incremental rolling windows for recursive inference (see ADR 002).
 - `tests/Forecasting.App.Tests`
 	- Unit tests for Part 1 and Part 2 behavior, including split/purge boundaries and artifact writing paths.
 
@@ -45,6 +56,12 @@ The solution is implemented in .NET 10 under `src/Forecasting.App` and verified 
 	 - Deduplicate again (defensive keep-last), compute lag/rolling features causally, build full 192-step horizon labels.
 	 - Apply anchor split/purge rules to prevent train/validation leakage for multi-step targets.
 	 - Persist supervised matrix and summary JSON.
+4. Forecast modeling and inference (Part 3)
+	 - Input: Part 2 supervised matrix CSV.
+	 - Train on `Split=Train`, forecast on `Split=Validation`.
+	 - Produce full 192-step horizon predictions for both models.
+	 - For recursive FastTree inference, use indexed history + incremental rolling statistics to keep per-step feature updates efficient.
+	 - Persist predictions CSV and run summary JSON.
 
 ## Leakage Controls
 
@@ -55,6 +72,9 @@ The solution is implemented in .NET 10 under `src/Forecasting.App` and verified 
 	- Feature windows are causal (history up to anchor time only).
 	- Split eligibility considers horizon end for train anchors.
 	- Boundary anchors are purged when future labels would overlap validation.
+- Part 3:
+	- Training uses only `Split=Train` anchors.
+	- Validation inference is recursive and uses only historical/previously predicted target values at each step.
 
 ## Runtime Artifacts
 
@@ -65,6 +85,9 @@ The solution is implemented in .NET 10 under `src/Forecasting.App` and verified 
 - Part 2 artifacts (`part2` mode):
 	- `artifacts/part2_supervised_matrix.csv`
 	- `artifacts/part2_supervised_matrix.summary.json`
+- Part 3 artifacts (`part3` mode):
+	- `artifacts/part3_predictions.csv`
+	- `artifacts/part3_predictions.summary.json`
 
 ## Architectural Style
 
