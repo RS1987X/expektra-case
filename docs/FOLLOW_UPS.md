@@ -17,3 +17,10 @@
 - Follow-up action: add column-level domain/range validation rules (for example physically impossible negatives or implausible spikes) with clear policy per column (flag/clip/drop).
 - Follow-up action: add stale-sensor detection (long constant runs/flatlines) for numeric telemetry columns and surface this in audit summaries.
 - Follow-up action: add target-quality safeguards for evaluation (for example explicit handling/reporting for zero or near-zero targets in percentage-based metrics).
+
+## Part 2 follow-up
+
+- Follow-up action: increase branch coverage for `Part2FeatureEngineering` to meet the repository target (>=75% for touched modules, or document baseline/no-regression rationale if not achievable in one change).
+- Follow-up action: add targeted Part 2 tests for split-boundary behavior, including explicit train-anchor coverage and deterministic assertions around the purge zone near validation start.
+- Follow-up action: add explicit continuity validation for Part 2 input cadence (expected 15-minute step); fail fast or clearly report when timestamp gaps/irregular intervals would break index-based lag/horizon semantics.
+- Follow-up action: remove or repurpose currently unused `MinutesPerStep` constant in Part 2 implementation to keep the module intentional and warning-free.

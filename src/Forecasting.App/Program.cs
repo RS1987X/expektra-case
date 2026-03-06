@@ -1,5 +1,34 @@
 ﻿using Forecasting.App;
 
+if (args.Length > 0 && string.Equals(args[0], "part2", StringComparison.OrdinalIgnoreCase))
+{
+	var part2InputPath = args.Length > 1 ? args[1] : Path.Combine("artifacts", "part1_feature_matrix.csv");
+	var part2OutputPath = args.Length > 2 ? args[2] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
+	var part2SummaryPath = args.Length > 3
+		? args[3]
+		: Path.Combine(
+			Path.GetDirectoryName(part2OutputPath) ?? "artifacts",
+			$"{Path.GetFileNameWithoutExtension(part2OutputPath)}.summary.json");
+
+	if (!File.Exists(part2InputPath))
+	{
+		Console.WriteLine("Part 2 input file not found.");
+		Console.WriteLine($"Input path: {part2InputPath}");
+		return;
+	}
+
+	var part1Rows = Part2FeatureEngineering.ReadFeatureMatrixCsv(part2InputPath);
+	var part2Dataset = Part2FeatureEngineering.BuildDataset(part1Rows);
+	Part2FeatureEngineering.WriteDatasetCsv(part2Dataset.Rows, part2OutputPath);
+	Part2FeatureEngineering.WriteSummaryJson(part2Dataset.Summary, part2SummaryPath);
+
+	Console.WriteLine($"Part 2 validation split starts at: {part2Dataset.Summary.ValidationStartUtc:yyyy-MM-dd HH:mm:ss} UTC");
+	Console.WriteLine($"Generated {part2Dataset.Summary.OutputRows} Part 2 supervised rows.");
+	Console.WriteLine($"Saved Part 2 dataset to: {part2OutputPath}");
+	Console.WriteLine($"Saved Part 2 summary to: {part2SummaryPath}");
+	return;
+}
+
 var dataPath = args.Length > 0 ? args[0] : Path.Combine("data", "testdata.csv");
 var holidaysPath = args.Length > 1 ? args[1] : Path.Combine("data", "holidays.public.csv");
 var outputPath = args.Length > 2 ? args[2] : Path.Combine("artifacts", "part1_feature_matrix.csv");
