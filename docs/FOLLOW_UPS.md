@@ -49,3 +49,6 @@
 - DONE (2026-03-06): include pre-model diagnostics (target level/trend shift checks, train-vs-validation distribution comparison, and cadence/missingness summaries).
 - DONE (2026-03-06): include post-model diagnostics (predicted-vs-actual plots for sampled anchors, residual distribution, and signed-bias by horizon bucket).
 - DONE (2026-03-06): persist diagnostics outputs as versionable artifacts (CSV summaries + simple HTML report) under `artifacts/diagnostics/`.
+- Follow-up action: document and surface the observed long-season pattern in target behavior (lower summers, higher winters) in diagnostics output and/or summary notes so model interpretation is explicit.
+- Follow-up action: add a simpler one-command entrypoint/task for running the Part 1 pipeline and writing its artifacts, so the first phase is easy to execute repeatedly.
+- Follow-up action: add a second FastTree variant that includes month-of-year seasonality features (for example month cyclic encoding) and evaluate it side-by-side with the current FastTree feature set; keep the current FastTree path unchanged/default so existing runs remain reproducible.
