@@ -250,12 +250,16 @@ public static class Part3Modeling
 
         var baselineModel = BuildSeasonalBaseline(trainRows);
         var fastTreeModel = BuildFastTreeRecursiveModel(trainRows, sorted);
+        var forecastAnchors = sorted
+            .Where(row => string.Equals(row.Split, "Train", StringComparison.OrdinalIgnoreCase)
+                          || string.Equals(row.Split, "Validation", StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
-        var forecasts = new List<Part3ForecastRow>(validationRows.Count * 2);
+        var forecasts = new List<Part3ForecastRow>(forecastAnchors.Count * 2);
         var baselineFallbackSteps = 0;
         var fastTreeFallbackSteps = 0;
 
-        foreach (var anchor in validationRows)
+        foreach (var anchor in forecastAnchors)
         {
             var baseline = PredictWithBaseline(anchor.AnchorUtcTime, baselineModel);
             baselineFallbackSteps += baseline.FallbackSteps;
@@ -284,8 +288,8 @@ public static class Part3Modeling
             trainRows.Count,
             validationRows.Count,
             [
-                new Part3ModelSummary("BaselineSeasonal", validationRows.Count, HorizonSteps, baselineFallbackSteps),
-                new Part3ModelSummary("FastTreeRecursive", validationRows.Count, HorizonSteps, fastTreeFallbackSteps)
+                new Part3ModelSummary("BaselineSeasonal", forecastAnchors.Count, HorizonSteps, baselineFallbackSteps),
+                new Part3ModelSummary("FastTreeRecursive", forecastAnchors.Count, HorizonSteps, fastTreeFallbackSteps)
             ]);
 
         return new Part3RunResult(forecasts, summary);

@@ -133,7 +133,9 @@ public class Part3ModelingTests
         var rows = trainRows.Concat([validationRow]).ToList();
 
         var result = Part3Modeling.RunModels(rows);
-        var baseline = Assert.Single(result.Forecasts.Where(f => f.ModelName == "BaselineSeasonal"));
+        var baseline = Assert.Single(result.Forecasts.Where(f =>
+            f.ModelName == "BaselineSeasonal" &&
+            f.AnchorUtcTime == validationAnchorTime));
         Assert.True(baseline.ExogenousFallbackSteps > 0);
     }
 
@@ -172,7 +174,7 @@ public class Part3ModelingTests
         var result = Part3Modeling.RunModels(rows);
 
         var fastTreeForecasts = result.Forecasts.Where(f => f.ModelName == "FastTreeRecursive").ToList();
-        Assert.Equal(4, fastTreeForecasts.Count);
+        Assert.Equal(rows.Count, fastTreeForecasts.Count);
         Assert.All(fastTreeForecasts, forecast =>
         {
             Assert.Equal(192, forecast.PredictedTargets.Count);
@@ -180,8 +182,15 @@ public class Part3ModelingTests
         });
 
         var summary = Assert.Single(result.Summary.Models.Where(model => model.ModelName == "FastTreeRecursive"));
-        Assert.Equal(4, summary.AnchorsForecasted);
+        Assert.Equal(rows.Count, summary.AnchorsForecasted);
         Assert.Equal(192, summary.HorizonSteps);
+
+        var splitCounts = result.Forecasts
+            .Where(forecast => forecast.ModelName == "FastTreeRecursive")
+            .GroupBy(forecast => forecast.Split, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(320, splitCounts["Train"]);
+        Assert.Equal(4, splitCounts["Validation"]);
     }
 
     [Fact]
@@ -206,6 +215,11 @@ public class Part3ModelingTests
             Assert.True(lines.Length > 1);
             Assert.Contains("Pred_tPlus192", lines[0]);
             Assert.Contains("Actual_tPlus192", lines[0]);
+
+            var trainRows = lines.Count(line => line.Contains(";Train;", StringComparison.Ordinal));
+            var validationRows = lines.Count(line => line.Contains(";Validation;", StringComparison.Ordinal));
+            Assert.True(trainRows > 0);
+            Assert.True(validationRows > 0);
 
             var summaryJson = File.ReadAllText(summaryPath);
             Assert.Contains("BaselineSeasonal", summaryJson);
