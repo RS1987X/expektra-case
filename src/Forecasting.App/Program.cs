@@ -1,5 +1,39 @@
 ﻿using Forecasting.App;
 
+if (args.Length > 0 && string.Equals(args[0], "diagnostics", StringComparison.OrdinalIgnoreCase))
+{
+	var diagnosticsInputPath = args.Length > 1 ? args[1] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
+	var diagnosticsPredictionsPath = args.Length > 2 ? args[2] : Path.Combine("artifacts", "part3_predictions.csv");
+	var diagnosticsOutputDirectory = args.Length > 3 ? args[3] : Path.Combine("artifacts", "diagnostics");
+
+	if (!File.Exists(diagnosticsInputPath))
+	{
+		Console.WriteLine("Diagnostics input file not found.");
+		Console.WriteLine($"Input path: {diagnosticsInputPath}");
+		return;
+	}
+
+	if (!File.Exists(diagnosticsPredictionsPath))
+	{
+		Console.WriteLine("Diagnostics predictions file not found.");
+		Console.WriteLine($"Predictions path: {diagnosticsPredictionsPath}");
+		return;
+	}
+
+	var diagnosticsResult = PartDiagnostics.RunDiagnostics(diagnosticsInputPath, diagnosticsPredictionsPath);
+	PartDiagnostics.WriteArtifacts(diagnosticsResult, diagnosticsOutputDirectory);
+
+	Console.WriteLine("Diagnostics residual summary:");
+	Console.WriteLine("Model\tMeanError\tMAE\tRMSE\tUnder%\tPoints");
+	foreach (var summary in diagnosticsResult.ResidualSummaries.OrderBy(summary => summary.ModelName, StringComparer.Ordinal))
+	{
+		Console.WriteLine($"{summary.ModelName}\t{summary.MeanError:F6}\t{summary.Mae:F6}\t{summary.Rmse:F6}\t{summary.UnderPredictionRate:F6}\t{summary.EvaluatedPoints}");
+	}
+
+	Console.WriteLine($"Saved diagnostics artifacts to: {diagnosticsOutputDirectory}");
+	return;
+}
+
 if (args.Length > 0 && string.Equals(args[0], "part4", StringComparison.OrdinalIgnoreCase))
 {
 	var part4InputPath = args.Length > 1 ? args[1] : Path.Combine("artifacts", "part2_supervised_matrix.csv");

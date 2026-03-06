@@ -45,7 +45,7 @@
 
 ## Diagnostics & visualization follow-up
 
-- Follow-up action: add a standalone diagnostics command (separate from core `part3`/`part4`) that generates lightweight visualization artifacts for quick inspection.
-- Follow-up action: include pre-model diagnostics (target level/trend shift checks, train-vs-validation distribution comparison, and cadence/missingness summaries).
-- Follow-up action: include post-model diagnostics (predicted-vs-actual plots for sampled anchors, residual distribution, and signed-bias by horizon bucket).
-- Follow-up action: persist diagnostics outputs as versionable artifacts (for example CSV summaries + simple HTML/PNG plots) under `artifacts/diagnostics/`.
+- DONE (2026-03-06): add a standalone diagnostics command (separate from core `part3`/`part4`) that generates lightweight visualization artifacts for quick inspection.
+- DONE (2026-03-06): include pre-model diagnostics (target level/trend shift checks, train-vs-validation distribution comparison, and cadence/missingness summaries).
+- DONE (2026-03-06): include post-model diagnostics (predicted-vs-actual plots for sampled anchors, residual distribution, and signed-bias by horizon bucket).
+- DONE (2026-03-06): persist diagnostics outputs as versionable artifacts (CSV summaries + simple HTML report) under `artifacts/diagnostics/`.
