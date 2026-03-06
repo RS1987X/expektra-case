@@ -91,6 +91,75 @@ public class Part4EvaluationTests
     }
 
     [Fact]
+    public void RunEvaluation_ModelWithNoEvaluablePoints_ThrowsInvalidOperationException()
+    {
+        var actualAnchor = new DateTime(2024, 2, 5, 0, 0, 0, DateTimeKind.Utc);
+        var missingAnchor = new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        var part2Path = CreatePart2Csv([BuildPart2Row(actualAnchor, "Validation", BuildActualTargets(10d))]);
+        var predictionsPath = CreatePredictionsCsv([BuildPredictionRow(missingAnchor, "Validation", "FastTreeRecursive", BuildPredictions(10d))]);
+
+        try
+        {
+            var ex = Assert.Throws<InvalidOperationException>(() => Part4Evaluation.RunEvaluation(part2Path, predictionsPath));
+            Assert.Contains("has no evaluable prediction points", ex.Message);
+        }
+        finally
+        {
+            File.Delete(part2Path);
+            File.Delete(predictionsPath);
+        }
+    }
+
+    [Fact]
+    public void RunEvaluation_NonFinitePredictionValue_ThrowsFormatException()
+    {
+        var anchor = new DateTime(2024, 2, 6, 0, 0, 0, DateTimeKind.Utc);
+        var part2Path = CreatePart2Csv([BuildPart2Row(anchor, "Validation", BuildActualTargets(10d))]);
+
+        var predictions = BuildPredictions(10d);
+        predictions[0] = double.NaN;
+        var predictionsPath = CreatePredictionsCsv([BuildPredictionRow(anchor, "Validation", "FastTreeRecursive", predictions)]);
+
+        try
+        {
+            var ex = Assert.Throws<FormatException>(() => Part4Evaluation.RunEvaluation(part2Path, predictionsPath));
+            Assert.Contains("non-finite", ex.Message);
+        }
+        finally
+        {
+            File.Delete(part2Path);
+            File.Delete(predictionsPath);
+        }
+    }
+
+    [Fact]
+    public void RunEvaluation_SampleUsesEarliestAnchorWithMatchedActuals()
+    {
+        var matchedAnchor = new DateTime(2024, 2, 7, 0, 0, 0, DateTimeKind.Utc);
+        var unmatchedEarlierAnchor = matchedAnchor.AddMinutes(-15);
+
+        var part2Path = CreatePart2Csv([BuildPart2Row(matchedAnchor, "Validation", BuildActualTargets(10d))]);
+        var predictionsPath = CreatePredictionsCsv(
+        [
+            BuildPredictionRow(unmatchedEarlierAnchor, "Validation", "FastTreeRecursive", BuildPredictions(9d)),
+            BuildPredictionRow(matchedAnchor, "Validation", "FastTreeRecursive", BuildPredictions(10d))
+        ]);
+
+        try
+        {
+            var result = Part4Evaluation.RunEvaluation(part2Path, predictionsPath);
+            Assert.NotEmpty(result.SamplePoints);
+            Assert.All(result.SamplePoints, sample => Assert.Equal(matchedAnchor, sample.AnchorUtcTime));
+        }
+        finally
+        {
+            File.Delete(part2Path);
+            File.Delete(predictionsPath);
+        }
+    }
+
+    [Fact]
     public void WriteMetricsAndSampleCsv_WritesExpectedHeaders()
     {
         var anchor = new DateTime(2024, 2, 4, 0, 0, 0, DateTimeKind.Utc);
@@ -224,7 +293,7 @@ public class Part4EvaluationTests
             "0"
         };
 
-        var predictedCells = predictedTargets.Select(value => value.ToString(CultureInfo.InvariantCulture));
+        var predictedCells = predictedTargets.Select(value => value.ToString("R", CultureInfo.InvariantCulture));
         var actualCells = Enumerable.Repeat("0", 192);
         return string.Join(';', prefix.Concat(predictedCells).Concat(actualCells));
     }

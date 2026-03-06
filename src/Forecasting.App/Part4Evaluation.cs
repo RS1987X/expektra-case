@@ -104,6 +104,11 @@ public static class Part4Evaluation
     {
         var accumulators = new Dictionary<string, MetricsAccumulator>(StringComparer.Ordinal);
 
+        foreach (var modelName in predictionPoints.Select(point => point.ModelName).Distinct(StringComparer.Ordinal))
+        {
+            accumulators[modelName] = new MetricsAccumulator();
+        }
+
         foreach (var prediction in predictionPoints)
         {
             if (!actualLookup.TryGetValue((prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
@@ -111,11 +116,7 @@ public static class Part4Evaluation
                 continue;
             }
 
-            if (!accumulators.TryGetValue(prediction.ModelName, out var accumulator))
-            {
-                accumulator = new MetricsAccumulator();
-                accumulators[prediction.ModelName] = accumulator;
-            }
+            var accumulator = accumulators[prediction.ModelName];
 
             var error = prediction.Predicted - actual;
             var absError = Math.Abs(error);
@@ -171,8 +172,10 @@ public static class Part4Evaluation
     {
         var firstAnchor = predictionPoints
             .Select(point => point.AnchorUtcTime)
+            .Distinct()
             .OrderBy(timestamp => timestamp)
-            .FirstOrDefault();
+            .FirstOrDefault(anchor => predictionPoints.Any(point =>
+                point.AnchorUtcTime == anchor && actualLookup.ContainsKey((point.AnchorUtcTime, point.HorizonStep))));
 
         if (firstAnchor == default)
         {
@@ -326,6 +329,11 @@ public static class Part4Evaluation
         if (!double.TryParse(value, NumberStyles.Float, InvariantCulture, out var parsed))
         {
             throw new FormatException($"Invalid {columnName} at line {lineNumber}: '{value}'.");
+        }
+
+        if (!double.IsFinite(parsed))
+        {
+            throw new FormatException($"Invalid {columnName} at line {lineNumber}: non-finite value '{value}'.");
         }
 
         return parsed;
