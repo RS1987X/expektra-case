@@ -21,6 +21,8 @@ public class PartDiagnosticsTests
         var modelB = BuildPredictions(9d);
         var predictionsPath = CreatePredictionsCsv(
         [
+            BuildPredictionRow(trainAnchor, "Train", "FastTreeRecursive", BuildPredictions(7d)),
+            BuildPredictionRow(trainAnchor, "Train", "BaselineSeasonal", BuildPredictions(9d)),
             BuildPredictionRow(validationAnchor, "Validation", "FastTreeRecursive", modelA),
             BuildPredictionRow(validationAnchor, "Validation", "BaselineSeasonal", modelB)
         ]);
@@ -30,22 +32,34 @@ public class PartDiagnosticsTests
             var result = PartDiagnostics.RunDiagnostics(part2Path, predictionsPath);
 
             Assert.Equal(2, result.PreModelSummaries.Count);
-            var residuals = result.ResidualSummaries.ToDictionary(summary => summary.ModelName, StringComparer.Ordinal);
-            Assert.Equal(2, residuals.Count);
+            Assert.Equal(4, result.ResidualSummaries.Count);
 
-            Assert.True(residuals.TryGetValue("FastTreeRecursive", out var fastTree));
-            Assert.Equal(192, fastTree!.EvaluatedPoints);
-            Assert.Equal(0d, fastTree.MeanError, 10);
+            var fastTreeValidation = Assert.Single(result.ResidualSummaries.Where(summary =>
+                summary.ModelName == "FastTreeRecursive" && summary.Split == "Validation"));
+            Assert.Equal(192, fastTreeValidation.EvaluatedPoints);
+            Assert.Equal(0d, fastTreeValidation.MeanError, 10);
 
-            Assert.True(residuals.TryGetValue("BaselineSeasonal", out var baseline));
-            Assert.Equal(100d, baseline!.UnderPredictionRate, 10);
+            var baselineValidation = Assert.Single(result.ResidualSummaries.Where(summary =>
+                summary.ModelName == "BaselineSeasonal" && summary.Split == "Validation"));
+            Assert.Equal(100d, baselineValidation.UnderPredictionRate, 10);
+
+            var fastTreeTrain = Assert.Single(result.ResidualSummaries.Where(summary =>
+                summary.ModelName == "FastTreeRecursive" && summary.Split == "Train"));
+            Assert.Equal(-1d, fastTreeTrain.MeanError, 10);
+
+            var baselineTrain = Assert.Single(result.ResidualSummaries.Where(summary =>
+                summary.ModelName == "BaselineSeasonal" && summary.Split == "Train"));
+            Assert.Equal(1d, baselineTrain.MeanError, 10);
+            Assert.Equal(100d, baselineTrain.OverPredictionRate, 10);
 
             var baselineBucket1 = Assert.Single(result.HorizonBucketSummaries.Where(summary =>
-                summary.ModelName == "BaselineSeasonal" && summary.HorizonStart == 1));
+                summary.ModelName == "BaselineSeasonal" && summary.Split == "Validation" && summary.HorizonStart == 1));
             Assert.Equal(24, baselineBucket1.EvaluatedPoints);
             Assert.Equal(-1d, baselineBucket1.MeanError, 10);
 
             Assert.NotEmpty(result.SamplePoints);
+            Assert.Contains(result.SamplePoints, point => point.Split == "Train");
+            Assert.Contains(result.SamplePoints, point => point.Split == "Validation");
         }
         finally
         {
@@ -128,6 +142,10 @@ public class PartDiagnosticsTests
             Assert.Contains("Time (UTC)", html);
             Assert.Contains("Target value", html);
             Assert.Contains("Predicted vs actual sampled anchors", html);
+            Assert.Contains("Split", html);
+
+            var residualCsv = File.ReadAllLines(Path.Combine(outputDir, "postmodel_residual_summary.csv"));
+            Assert.StartsWith("ModelName;Split;EvaluatedPoints;MeanError", residualCsv[0], StringComparison.Ordinal);
 
             var targetSvg = File.ReadAllText(Path.Combine(outputDir, "target_over_time.svg"));
             Assert.Contains("Time (UTC)", targetSvg);

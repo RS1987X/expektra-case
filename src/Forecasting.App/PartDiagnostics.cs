@@ -27,6 +27,7 @@ public sealed record DiagnosticsCadenceSummary(
 
 public sealed record DiagnosticsResidualSummary(
     string ModelName,
+    string Split,
     int EvaluatedPoints,
     double MeanError,
     double Mae,
@@ -39,6 +40,7 @@ public sealed record DiagnosticsResidualSummary(
 
 public sealed record DiagnosticsHorizonBucketSummary(
     string ModelName,
+    string Split,
     int HorizonStart,
     int HorizonEnd,
     int EvaluatedPoints,
@@ -50,6 +52,7 @@ public sealed record DiagnosticsHorizonBucketSummary(
 
 public sealed record DiagnosticsSamplePoint(
     string ModelName,
+    string Split,
     DateTime AnchorUtcTime,
     DateTime ForecastUtcTime,
     int HorizonStep,
@@ -120,7 +123,6 @@ public static class PartDiagnostics
 
         var actualLookup = BuildActualLookup(rows);
         var predictions = ReadPredictionPoints(part3PredictionsCsvPath)
-            .Where(point => string.Equals(point.Split, "Validation", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         var residualSummaries = BuildResidualSummaries(predictions, actualLookup);
@@ -207,12 +209,15 @@ public static class PartDiagnostics
     {
         EnsureOutputDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
-        writer.WriteLine("ModelName;EvaluatedPoints;MeanError;MAE;RMSE;ResidualP05;ResidualP50;ResidualP95;UnderPredictionRate;OverPredictionRate");
+        writer.WriteLine("ModelName;Split;EvaluatedPoints;MeanError;MAE;RMSE;ResidualP05;ResidualP50;ResidualP95;UnderPredictionRate;OverPredictionRate");
 
-        foreach (var summary in result.ResidualSummaries.OrderBy(summary => summary.ModelName, StringComparer.Ordinal))
+        foreach (var summary in result.ResidualSummaries
+                     .OrderBy(summary => summary.ModelName, StringComparer.Ordinal)
+                     .ThenBy(summary => summary.Split, StringComparer.Ordinal))
         {
             writer.WriteLine(string.Join(';',
                 summary.ModelName,
+                summary.Split,
                 summary.EvaluatedPoints.ToString(InvariantCulture),
                 summary.MeanError.ToString("F6", InvariantCulture),
                 summary.Mae.ToString("F6", InvariantCulture),
@@ -229,14 +234,16 @@ public static class PartDiagnostics
     {
         EnsureOutputDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
-        writer.WriteLine("ModelName;HorizonStart;HorizonEnd;EvaluatedPoints;MeanError;MAE;RMSE;UnderPredictionRate;OverPredictionRate");
+        writer.WriteLine("ModelName;Split;HorizonStart;HorizonEnd;EvaluatedPoints;MeanError;MAE;RMSE;UnderPredictionRate;OverPredictionRate");
 
         foreach (var summary in result.HorizonBucketSummaries
                      .OrderBy(summary => summary.ModelName, StringComparer.Ordinal)
+                     .ThenBy(summary => summary.Split, StringComparer.Ordinal)
                      .ThenBy(summary => summary.HorizonStart))
         {
             writer.WriteLine(string.Join(';',
                 summary.ModelName,
+                summary.Split,
                 summary.HorizonStart.ToString(InvariantCulture),
                 summary.HorizonEnd.ToString(InvariantCulture),
                 summary.EvaluatedPoints.ToString(InvariantCulture),
@@ -252,15 +259,17 @@ public static class PartDiagnostics
     {
         EnsureOutputDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
-        writer.WriteLine("ModelName;AnchorUtcTime;ForecastUtcTime;HorizonStep;Predicted;Actual;Residual");
+        writer.WriteLine("ModelName;Split;AnchorUtcTime;ForecastUtcTime;HorizonStep;Predicted;Actual;Residual");
 
         foreach (var point in result.SamplePoints
-                     .OrderBy(point => point.AnchorUtcTime)
+                     .OrderBy(point => point.Split, StringComparer.Ordinal)
+                     .ThenBy(point => point.AnchorUtcTime)
                      .ThenBy(point => point.ModelName, StringComparer.Ordinal)
                      .ThenBy(point => point.HorizonStep))
         {
             writer.WriteLine(string.Join(';',
                 point.ModelName,
+                point.Split,
                 point.AnchorUtcTime.ToString("yyyy-MM-dd HH:mm:ss", InvariantCulture),
                 point.ForecastUtcTime.ToString("yyyy-MM-dd HH:mm:ss", InvariantCulture),
                 point.HorizonStep.ToString(InvariantCulture),
@@ -367,23 +376,20 @@ public static class PartDiagnostics
         return summaries;
     }
 
-    private static Dictionary<(DateTime AnchorUtcTime, int HorizonStep), double> BuildActualLookup(IReadOnlyList<Part3InputRow> rows)
+    private static Dictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> BuildActualLookup(IReadOnlyList<Part3InputRow> rows)
     {
-        var lookup = new Dictionary<(DateTime AnchorUtcTime, int HorizonStep), double>();
+        var lookup = new Dictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double>();
         foreach (var row in rows)
         {
-            if (!string.Equals(row.Split, "Validation", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
+            var split = NormalizeSplit(row.Split);
 
             for (var step = 1; step <= HorizonSteps; step++)
             {
-                var key = (row.AnchorUtcTime, step);
+                var key = (split, row.AnchorUtcTime, step);
                 if (!lookup.TryAdd(key, row.HorizonTargets[step - 1]))
                 {
                     throw new InvalidOperationException(
-                        $"Duplicate ground-truth key for anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}' and horizon '{step}'.");
+                        $"Duplicate ground-truth key for split '{split}', anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}', and horizon '{step}'.");
                 }
             }
         }
@@ -393,45 +399,18 @@ public static class PartDiagnostics
 
     private static List<DiagnosticsResidualSummary> BuildResidualSummaries(
         IReadOnlyList<PredictionPoint> predictions,
-        IReadOnlyDictionary<(DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
-        var stats = new Dictionary<string, RunningStats>(StringComparer.Ordinal);
+        var stats = new Dictionary<(string ModelName, string Split), RunningStats>(new ModelSplitComparer());
         foreach (var prediction in predictions)
         {
-            if (!actualLookup.TryGetValue((prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
+            var split = NormalizeSplit(prediction.Split);
+            if (!actualLookup.TryGetValue((split, prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
             {
                 continue;
             }
 
-            if (!stats.TryGetValue(prediction.ModelName, out var running))
-            {
-                running = new RunningStats();
-                stats[prediction.ModelName] = running;
-            }
-
-            running.Add(prediction.Predicted - actual);
-        }
-
-        return stats
-            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
-            .Select(pair => BuildResidualSummary(pair.Key, pair.Value))
-            .ToList();
-    }
-
-    private static List<DiagnosticsHorizonBucketSummary> BuildHorizonBucketSummaries(
-        IReadOnlyList<PredictionPoint> predictions,
-        IReadOnlyDictionary<(DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
-    {
-        var stats = new Dictionary<(string ModelName, int BucketStart), RunningStats>(new ModelBucketComparer());
-        foreach (var prediction in predictions)
-        {
-            if (!actualLookup.TryGetValue((prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
-            {
-                continue;
-            }
-
-            var bucketStart = ((prediction.HorizonStep - 1) / HorizonBucketSize) * HorizonBucketSize + 1;
-            var key = (prediction.ModelName, bucketStart);
+            var key = (prediction.ModelName, split);
             if (!stats.TryGetValue(key, out var running))
             {
                 running = new RunningStats();
@@ -443,13 +422,46 @@ public static class PartDiagnostics
 
         return stats
             .OrderBy(pair => pair.Key.ModelName, StringComparer.Ordinal)
+            .ThenBy(pair => pair.Key.Split, StringComparer.Ordinal)
+            .Select(pair => BuildResidualSummary(pair.Key.ModelName, pair.Key.Split, pair.Value))
+            .ToList();
+    }
+
+    private static List<DiagnosticsHorizonBucketSummary> BuildHorizonBucketSummaries(
+        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+    {
+        var stats = new Dictionary<(string ModelName, string Split, int BucketStart), RunningStats>(new ModelSplitBucketComparer());
+        foreach (var prediction in predictions)
+        {
+            var split = NormalizeSplit(prediction.Split);
+            if (!actualLookup.TryGetValue((split, prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
+            {
+                continue;
+            }
+
+            var bucketStart = ((prediction.HorizonStep - 1) / HorizonBucketSize) * HorizonBucketSize + 1;
+            var key = (prediction.ModelName, split, bucketStart);
+            if (!stats.TryGetValue(key, out var running))
+            {
+                running = new RunningStats();
+                stats[key] = running;
+            }
+
+            running.Add(prediction.Predicted - actual);
+        }
+
+        return stats
+            .OrderBy(pair => pair.Key.ModelName, StringComparer.Ordinal)
+            .ThenBy(pair => pair.Key.Split, StringComparer.Ordinal)
             .ThenBy(pair => pair.Key.BucketStart)
             .Select(pair =>
             {
-                var summary = BuildResidualSummary(pair.Key.ModelName, pair.Value);
+                var summary = BuildResidualSummary(pair.Key.ModelName, pair.Key.Split, pair.Value);
                 var bucketEnd = Math.Min(HorizonSteps, pair.Key.BucketStart + HorizonBucketSize - 1);
                 return new DiagnosticsHorizonBucketSummary(
                     summary.ModelName,
+                    summary.Split,
                     pair.Key.BucketStart,
                     bucketEnd,
                     summary.EvaluatedPoints,
@@ -464,30 +476,41 @@ public static class PartDiagnostics
 
     private static List<DiagnosticsSamplePoint> BuildSamplePoints(
         IReadOnlyList<PredictionPoint> predictions,
-        IReadOnlyDictionary<(DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var selectedAnchors = predictions
-            .Select(point => point.AnchorUtcTime)
-            .Distinct()
-            .OrderBy(anchor => anchor)
-            .Where(anchor => predictions.Any(point => point.AnchorUtcTime == anchor && actualLookup.ContainsKey((anchor, point.HorizonStep))))
-            .Take(SampleAnchors)
+            .GroupBy(point => NormalizeSplit(point.Split), StringComparer.Ordinal)
+            .SelectMany(group =>
+            {
+                var split = group.Key;
+                return group
+                    .Select(point => point.AnchorUtcTime)
+                    .Distinct()
+                    .OrderBy(anchor => anchor)
+                    .Where(anchor => group.Any(point =>
+                        point.AnchorUtcTime == anchor && actualLookup.ContainsKey((split, anchor, point.HorizonStep))))
+                    .Take(SampleAnchors)
+                    .Select(anchor => (Split: split, AnchorUtcTime: anchor));
+            })
             .ToHashSet();
 
         var sample = new List<DiagnosticsSamplePoint>();
         foreach (var prediction in predictions
-                     .Where(point => selectedAnchors.Contains(point.AnchorUtcTime))
-                     .OrderBy(point => point.AnchorUtcTime)
+                     .Where(point => selectedAnchors.Contains((NormalizeSplit(point.Split), point.AnchorUtcTime)))
+                     .OrderBy(point => NormalizeSplit(point.Split), StringComparer.Ordinal)
+                     .ThenBy(point => point.AnchorUtcTime)
                      .ThenBy(point => point.ModelName, StringComparer.Ordinal)
                      .ThenBy(point => point.HorizonStep))
         {
-            if (!actualLookup.TryGetValue((prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
+            var split = NormalizeSplit(prediction.Split);
+            if (!actualLookup.TryGetValue((split, prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
             {
                 continue;
             }
 
             sample.Add(new DiagnosticsSamplePoint(
                 prediction.ModelName,
+                split,
                 prediction.AnchorUtcTime,
                 prediction.AnchorUtcTime.AddMinutes(prediction.HorizonStep * MinutesPerStep),
                 prediction.HorizonStep,
@@ -499,16 +522,17 @@ public static class PartDiagnostics
         return sample;
     }
 
-    private static DiagnosticsResidualSummary BuildResidualSummary(string modelName, RunningStats running)
+    private static DiagnosticsResidualSummary BuildResidualSummary(string modelName, string split, RunningStats running)
     {
         if (running.Count == 0)
         {
-            return new DiagnosticsResidualSummary(modelName, 0, 0d, 0d, 0d, 0d, 0d, 0d, 0d, 0d);
+            return new DiagnosticsResidualSummary(modelName, split, 0, 0d, 0d, 0d, 0d, 0d, 0d, 0d, 0d);
         }
 
         var quantiles = ComputeQuantiles(running.Residuals);
         return new DiagnosticsResidualSummary(
             modelName,
+            split,
             running.Count,
             running.Sum / running.Count,
             running.SumAbs / running.Count,
@@ -831,10 +855,10 @@ public static class PartDiagnostics
     private static void AppendResidualTable(StringBuilder sb, IReadOnlyList<DiagnosticsResidualSummary> summaries)
     {
         sb.AppendLine("<h2>Residual summary</h2>");
-        sb.AppendLine("<table><thead><tr><th>Model</th><th>Points</th><th>MeanError</th><th>MAE</th><th>RMSE</th><th>ResidualP05</th><th>ResidualP50</th><th>ResidualP95</th><th>Under%</th><th>Over%</th></tr></thead><tbody>");
-        foreach (var summary in summaries.OrderBy(summary => summary.ModelName, StringComparer.Ordinal))
+        sb.AppendLine("<table><thead><tr><th>Model</th><th>Split</th><th>Points</th><th>MeanError</th><th>MAE</th><th>RMSE</th><th>ResidualP05</th><th>ResidualP50</th><th>ResidualP95</th><th>Under%</th><th>Over%</th></tr></thead><tbody>");
+        foreach (var summary in summaries.OrderBy(summary => summary.ModelName, StringComparer.Ordinal).ThenBy(summary => summary.Split, StringComparer.Ordinal))
         {
-            sb.AppendLine($"<tr><td>{Escape(summary.ModelName)}</td><td>{summary.EvaluatedPoints}</td><td>{summary.MeanError:F3}</td><td>{summary.Mae:F3}</td><td>{summary.Rmse:F3}</td><td>{summary.ResidualP05:F3}</td><td>{summary.ResidualP50:F3}</td><td>{summary.ResidualP95:F3}</td><td>{summary.UnderPredictionRate:F2}</td><td>{summary.OverPredictionRate:F2}</td></tr>");
+            sb.AppendLine($"<tr><td>{Escape(summary.ModelName)}</td><td>{Escape(summary.Split)}</td><td>{summary.EvaluatedPoints}</td><td>{summary.MeanError:F3}</td><td>{summary.Mae:F3}</td><td>{summary.Rmse:F3}</td><td>{summary.ResidualP05:F3}</td><td>{summary.ResidualP50:F3}</td><td>{summary.ResidualP95:F3}</td><td>{summary.UnderPredictionRate:F2}</td><td>{summary.OverPredictionRate:F2}</td></tr>");
         }
         sb.AppendLine("</tbody></table>");
     }
@@ -842,10 +866,10 @@ public static class PartDiagnostics
     private static void AppendHorizonBucketTable(StringBuilder sb, IReadOnlyList<DiagnosticsHorizonBucketSummary> summaries)
     {
         sb.AppendLine("<h2>Signed bias by horizon bucket</h2>");
-        sb.AppendLine("<table><thead><tr><th>Model</th><th>Bucket</th><th>Points</th><th>MeanError</th><th>MAE</th><th>RMSE</th><th>Under%</th><th>Over%</th></tr></thead><tbody>");
-        foreach (var summary in summaries.OrderBy(summary => summary.ModelName, StringComparer.Ordinal).ThenBy(summary => summary.HorizonStart))
+        sb.AppendLine("<table><thead><tr><th>Model</th><th>Split</th><th>Bucket</th><th>Points</th><th>MeanError</th><th>MAE</th><th>RMSE</th><th>Under%</th><th>Over%</th></tr></thead><tbody>");
+        foreach (var summary in summaries.OrderBy(summary => summary.ModelName, StringComparer.Ordinal).ThenBy(summary => summary.Split, StringComparer.Ordinal).ThenBy(summary => summary.HorizonStart))
         {
-            sb.AppendLine($"<tr><td>{Escape(summary.ModelName)}</td><td>{summary.HorizonStart}-{summary.HorizonEnd}</td><td>{summary.EvaluatedPoints}</td><td>{summary.MeanError:F3}</td><td>{summary.Mae:F3}</td><td>{summary.Rmse:F3}</td><td>{summary.UnderPredictionRate:F2}</td><td>{summary.OverPredictionRate:F2}</td></tr>");
+            sb.AppendLine($"<tr><td>{Escape(summary.ModelName)}</td><td>{Escape(summary.Split)}</td><td>{summary.HorizonStart}-{summary.HorizonEnd}</td><td>{summary.EvaluatedPoints}</td><td>{summary.MeanError:F3}</td><td>{summary.Mae:F3}</td><td>{summary.Rmse:F3}</td><td>{summary.UnderPredictionRate:F2}</td><td>{summary.OverPredictionRate:F2}</td></tr>");
         }
         sb.AppendLine("</tbody></table>");
     }
@@ -854,63 +878,72 @@ public static class PartDiagnostics
     {
         sb.AppendLine("<h2>Predicted vs actual sampled anchors</h2>");
 
-        var byAnchor = samplePoints
-            .GroupBy(point => point.AnchorUtcTime)
-            .OrderBy(group => group.Key)
+        var bySplit = samplePoints
+            .GroupBy(point => point.Split, StringComparer.Ordinal)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
             .ToList();
 
-        if (byAnchor.Count == 0)
+        if (bySplit.Count == 0)
         {
             sb.AppendLine("<p>No matched sample points available.</p>");
             return;
         }
 
-        foreach (var anchorGroup in byAnchor)
+        foreach (var splitGroup in bySplit)
         {
-            var anchorPoints = anchorGroup.ToList();
-            var actualSeries = anchorPoints
-                .GroupBy(point => point.HorizonStep)
-                .Select(group => group.First())
-                .OrderBy(point => point.HorizonStep)
+            sb.AppendLine($"<h3>Split: {Escape(splitGroup.Key)}</h3>");
+            var byAnchor = splitGroup
+                .GroupBy(point => point.AnchorUtcTime)
+                .OrderBy(group => group.Key)
                 .ToList();
 
-            var modelGroups = anchorPoints
-                .GroupBy(point => point.ModelName)
-                .OrderBy(group => group.Key, StringComparer.Ordinal)
-                .ToList();
-
-            var minY = Math.Min(
-                actualSeries.Count == 0 ? 0d : actualSeries.Min(point => point.Actual),
-                modelGroups.SelectMany(group => group).DefaultIfEmpty().Min(point => point?.Predicted ?? 0d));
-            var maxY = Math.Max(
-                actualSeries.Count == 0 ? 0d : actualSeries.Max(point => point.Actual),
-                modelGroups.SelectMany(group => group).DefaultIfEmpty().Max(point => point?.Predicted ?? 0d));
-
-            if (Math.Abs(maxY - minY) < 1e-9)
+            foreach (var anchorGroup in byAnchor)
             {
-                maxY = minY + 1d;
+                var anchorPoints = anchorGroup.ToList();
+                var actualSeries = anchorPoints
+                    .GroupBy(point => point.HorizonStep)
+                    .Select(group => group.First())
+                    .OrderBy(point => point.HorizonStep)
+                    .ToList();
+
+                var modelGroups = anchorPoints
+                    .GroupBy(point => point.ModelName)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .ToList();
+
+                var minY = Math.Min(
+                    actualSeries.Count == 0 ? 0d : actualSeries.Min(point => point.Actual),
+                    modelGroups.SelectMany(group => group).DefaultIfEmpty().Min(point => point?.Predicted ?? 0d));
+                var maxY = Math.Max(
+                    actualSeries.Count == 0 ? 0d : actualSeries.Max(point => point.Actual),
+                    modelGroups.SelectMany(group => group).DefaultIfEmpty().Max(point => point?.Predicted ?? 0d));
+
+                if (Math.Abs(maxY - minY) < 1e-9)
+                {
+                    maxY = minY + 1d;
+                }
+
+                sb.AppendLine($"<h4>Anchor {anchorGroup.Key:yyyy-MM-dd HH:mm:ss} UTC</h4>");
+                sb.AppendLine("<svg viewBox=\"0 0 960 260\" width=\"960\" height=\"260\" role=\"img\" aria-label=\"Prediction plot\">");
+                sb.AppendLine("<line x1=\"40\" y1=\"220\" x2=\"920\" y2=\"220\" stroke=\"#444\" />");
+                sb.AppendLine("<line x1=\"40\" y1=\"20\" x2=\"40\" y2=\"220\" stroke=\"#444\" />");
+
+                var actualPolyline = BuildPolyline(actualSeries.Select(point => (point.HorizonStep, point.Actual)).ToList(), minY, maxY);
+                sb.AppendLine($"<polyline points=\"{actualPolyline}\" fill=\"none\" stroke=\"#000\" stroke-width=\"2\" />");
+
+                var dashStyles = new[] { "6 3", "2 2", "10 4", "1 4" };
+                var modelIndex = 0;
+                foreach (var modelGroup in modelGroups)
+                {
+                    var polyline = BuildPolyline(modelGroup.OrderBy(point => point.HorizonStep).Select(point => (point.HorizonStep, point.Predicted)).ToList(), minY, maxY);
+                    var dash = dashStyles[modelIndex % dashStyles.Length];
+                    sb.AppendLine($"<polyline points=\"{polyline}\" fill=\"none\" stroke=\"hsl({(modelIndex * 67) % 360} 70% 40%)\" stroke-width=\"1.8\" stroke-dasharray=\"{dash}\" />");
+                    modelIndex++;
+                }
+
+                sb.AppendLine("</svg>");
+                sb.AppendLine("<p><strong>Legend:</strong> solid black = actual, dashed lines = models.</p>");
             }
-
-            sb.AppendLine($"<h3>Anchor {anchorGroup.Key:yyyy-MM-dd HH:mm:ss} UTC</h3>");
-            sb.AppendLine("<svg viewBox=\"0 0 960 260\" width=\"960\" height=\"260\" role=\"img\" aria-label=\"Prediction plot\">");
-            sb.AppendLine("<line x1=\"40\" y1=\"220\" x2=\"920\" y2=\"220\" stroke=\"#444\" />");
-            sb.AppendLine("<line x1=\"40\" y1=\"20\" x2=\"40\" y2=\"220\" stroke=\"#444\" />");
-
-            var actualPolyline = BuildPolyline(actualSeries.Select(point => (point.HorizonStep, point.Actual)).ToList(), minY, maxY);
-            sb.AppendLine($"<polyline points=\"{actualPolyline}\" fill=\"none\" stroke=\"#000\" stroke-width=\"2\" />");
-
-            var dashStyles = new[] { "6 3", "2 2", "10 4", "1 4" };
-            var modelIndex = 0;
-            foreach (var modelGroup in modelGroups)
-            {
-                var polyline = BuildPolyline(modelGroup.OrderBy(point => point.HorizonStep).Select(point => (point.HorizonStep, point.Predicted)).ToList(), minY, maxY);
-                var dash = dashStyles[modelIndex % dashStyles.Length];
-                sb.AppendLine($"<polyline points=\"{polyline}\" fill=\"none\" stroke=\"hsl({(modelIndex * 67) % 360} 70% 40%)\" stroke-width=\"1.8\" stroke-dasharray=\"{dash}\" />");
-                modelIndex++;
-            }
-
-            sb.AppendLine("</svg>");
-            sb.AppendLine("<p><strong>Legend:</strong> solid black = actual, dashed lines = models.</p>");
         }
     }
 
@@ -968,16 +1001,32 @@ public static class PartDiagnostics
             .Replace("'", "&#39;", StringComparison.Ordinal);
     }
 
-    private sealed class ModelBucketComparer : IEqualityComparer<(string ModelName, int BucketStart)>
+    private sealed class ModelSplitComparer : IEqualityComparer<(string ModelName, string Split)>
     {
-        public bool Equals((string ModelName, int BucketStart) x, (string ModelName, int BucketStart) y)
+        public bool Equals((string ModelName, string Split) x, (string ModelName, string Split) y)
         {
-            return string.Equals(x.ModelName, y.ModelName, StringComparison.Ordinal) && x.BucketStart == y.BucketStart;
+            return string.Equals(x.ModelName, y.ModelName, StringComparison.Ordinal)
+                   && string.Equals(x.Split, y.Split, StringComparison.Ordinal);
         }
 
-        public int GetHashCode((string ModelName, int BucketStart) obj)
+        public int GetHashCode((string ModelName, string Split) obj)
         {
-            return HashCode.Combine(obj.ModelName, obj.BucketStart);
+            return HashCode.Combine(obj.ModelName, obj.Split);
+        }
+    }
+
+    private sealed class ModelSplitBucketComparer : IEqualityComparer<(string ModelName, string Split, int BucketStart)>
+    {
+        public bool Equals((string ModelName, string Split, int BucketStart) x, (string ModelName, string Split, int BucketStart) y)
+        {
+            return string.Equals(x.ModelName, y.ModelName, StringComparison.Ordinal)
+                   && string.Equals(x.Split, y.Split, StringComparison.Ordinal)
+                   && x.BucketStart == y.BucketStart;
+        }
+
+        public int GetHashCode((string ModelName, string Split, int BucketStart) obj)
+        {
+            return HashCode.Combine(obj.ModelName, obj.Split, obj.BucketStart);
         }
     }
 }

@@ -51,6 +51,7 @@ public sealed record PreprocessedDataset(
 public static class Part1Preprocessing
 {
     private const int ValidationWindowDays = 30;
+    public const int DefaultValidationWindowDays = ValidationWindowDays;
     private static readonly CultureInfo SwedishCulture = CultureInfo.GetCultureInfo("sv-SE");
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
     private static readonly string[] AcceptedDateTimeFormats = ["yyyy-MM-dd HH:mm", "yyyy-MM-dd HH:mm:ss"];
@@ -100,8 +101,16 @@ public static class Part1Preprocessing
         return result;
     }
 
-    public static PreprocessedDataset BuildPreprocessedDatasetForEvaluation(string dataCsvPath, string holidaysCsvPath)
+    public static PreprocessedDataset BuildPreprocessedDatasetForEvaluation(
+        string dataCsvPath,
+        string holidaysCsvPath,
+        int validationWindowDays = DefaultValidationWindowDays)
     {
+        if (validationWindowDays <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(validationWindowDays), "Validation window days must be greater than zero.");
+        }
+
         var rawRows = ReadRawDataRows(dataCsvPath).OrderBy(row => row.UtcTime).ToList();
         var inputRowsBeforeDeduplication = rawRows.Count;
         rawRows = DeduplicateByUtcTimeKeepLast(rawRows, out var droppedDuplicateTimestampRows);
@@ -112,7 +121,7 @@ public static class Part1Preprocessing
         }
 
         var holidays = ReadSwedishPublicHolidays(holidaysCsvPath);
-        var validationStartUtc = rawRows[^1].UtcTime.AddDays(-ValidationWindowDays);
+        var validationStartUtc = rawRows[^1].UtcTime.AddDays(-validationWindowDays);
 
         EnsureObservedBeforeValidation(rawRows, validationStartUtc, row => row.Target, "Target");
         EnsureObservedBeforeValidation(rawRows, validationStartUtc, row => row.Temperature, "Temperature");
