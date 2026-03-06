@@ -189,3 +189,123 @@ Implement Part 2 according to the assignment: create lagged target features, rol
 - `dotnet build ExpekraCase.sln`
 - `dotnet test ExpekraCase.sln`
 - `dotnet test ExpekraCase.sln --collect:"XPlat Code Coverage"`
+
+## Part 3 (Del 3) – Model implementation
+
+### Goal
+
+Implement at least two forecasting models for multi-step prediction using the Part 2 dataset, where at least one model is an ML model.
+
+### Assignment-aligned model choices
+
+To satisfy Del 3 with clear comparability and manageable implementation effort in .NET:
+
+1. **Model A (Baseline): Naive seasonal profile**
+	- Predict next 48h from historical average for same weekday + quarter-hour bucket.
+	- Serves as reference baseline.
+2. **Model B (ML): ML.NET FastTree regression**
+	- Use `Microsoft.ML` FastTree as the required ML model.
+	- Implement recursive multi-step forecasting (iteratively predict one step ahead, feed prediction into lag-dependent features for next step).
+
+### Assumptions
+
+- Input is `artifacts/part2_supervised_matrix.csv` with split labels and horizon targets.
+- Forecasting horizon for implementation and comparison is 192 steps (48h), aligned with Del 2 output shape.
+- Validation split from Del 2 is respected (train rows only for fitting; validation for evaluation in Del 4).
+- No external APIs/cloud services are required.
+
+### In scope
+
+1. Add model abstractions and implementations for:
+	- Seasonal baseline
+	- ML.NET FastTree
+2. Add training/inference pipeline wiring in C#.
+3. Persist prediction outputs for downstream evaluation (Del 4).
+4. Add tests that validate core model plumbing and output contracts.
+
+### Out of scope
+
+- Full model comparison/reporting metrics tables (Del 4).
+- Final reflective write-up (Del 5).
+- ONNX/LSTM path (Alternative C), unless explicitly selected later.
+
+### Ambiguity-resolving definitions
+
+- “At least two models, one ML” is satisfied by **Baseline + FastTree**.
+- For multi-step strategy in FastTree, choose **recursive strategy** for Part 3 (single-step learner rolled forward to 192 steps).
+- Baseline prediction key is `(DayOfWeek, HourOfDay, MinuteOfHour)`; if key is unseen in training, fallback to global training mean.
+- Predictions are generated for all 192 horizons, producing a deterministic vector in timestamp order.
+
+### Deliverables
+
+1. Typed model interfaces/contracts (fit + predict horizon).
+2. Baseline model implementation.
+3. ML.NET FastTree model implementation.
+4. Prediction artifact(s) in `artifacts/` (CSV/JSON) with:
+	- anchor timestamp
+	- model name
+	- predicted `t+1..t+192`
+5. Unit tests for:
+	- baseline behavior and fallback
+	- model output shape and ordering
+	- deterministic prediction contract
+
+### Proposed code structure
+
+- `src/Forecasting.App/Part3Modeling.cs`
+	- model contracts
+	- training data mapping helpers
+	- baseline + FastTree implementations
+- `src/Forecasting.App/Program.cs`
+	- add `part3` mode to run model training + inference artifact generation
+- `tests/Forecasting.App.Tests/Part3ModelingTests.cs`
+	- focused unit tests for model logic and output contracts
+
+### Implementation steps
+
+1. Define Part 3 DTOs/contracts
+	- model input row representation
+	- prediction vector result (`192` outputs)
+	- model interface with `Train(...)` and `PredictHorizon(...)`
+2. Implement baseline model
+	- aggregate train rows by `(DayOfWeek, HourOfDay, MinuteOfHour)`
+	- generate 192-step forecast for each anchor
+	- add global-mean fallback
+3. Implement FastTree recursive model
+	- train one-step target model using Part 2 features
+	- recursively generate horizon predictions with lag updates from predicted values
+4. Persist artifacts
+	- write predictions in stable schema for Del 4 metric computation
+5. Add tests
+	- verify output vector length and temporal ordering
+	- verify baseline fallback path
+	- verify recursive path produces finite outputs and stable shape
+
+### Done criteria
+
+- [ ] Two models are implemented and runnable from the CLI.
+- [ ] At least one model uses ML.NET (`Microsoft.ML`).
+- [ ] Baseline model predicts using historical seasonal grouping logic.
+- [ ] FastTree model generates 192-step forecasts via recursive strategy.
+- [ ] Prediction artifacts are persisted for Del 4 evaluation.
+- [ ] Tests cover baseline + ML output contracts and pass.
+
+### Test cases (minimum)
+
+1. Baseline seasonal mapping
+	- known bucket -> expected average prediction
+	- unseen bucket -> global-mean fallback
+2. ML output contract
+	- for valid anchor, output length is exactly 192
+	- all predicted values are finite numbers
+3. Determinism and shape
+	- repeated inference with fixed inputs returns same vector length/order
+	- artifact writer includes expected headers/columns
+
+### Verification (Verifiering)
+
+- `dotnet restore ExpekraCase.sln`
+- `dotnet build ExpekraCase.sln`
+- `dotnet test ExpekraCase.sln`
+- `dotnet test ExpekraCase.sln --collect:"XPlat Code Coverage"`
+- `dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part3 <part2_input_csv> <predictions_output_csv> <summary_output_json>`
