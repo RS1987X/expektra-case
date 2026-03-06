@@ -1,0 +1,252 @@
+using System.Globalization;
+using Forecasting.App;
+
+namespace Forecasting.App.Tests;
+
+public class Part4EvaluationTests
+{
+    [Fact]
+    public void RunEvaluation_ComputesExpectedMicroAveragedMetrics()
+    {
+        var anchor = new DateTime(2024, 2, 1, 0, 0, 0, DateTimeKind.Utc);
+        var part2Path = CreatePart2Csv([BuildPart2Row(anchor, "Validation", BuildActualTargets(10d))]);
+        var predictionsPath = CreatePredictionsCsv([BuildPredictionRow(anchor, "Validation", "FastTreeRecursive", BuildPredictions(10d, step1: 12d, step2: 8d))]);
+
+        try
+        {
+            var result = Part4Evaluation.RunEvaluation(part2Path, predictionsPath);
+            var metric = Assert.Single(result.Metrics);
+
+            Assert.Equal("FastTreeRecursive", metric.ModelName);
+            Assert.Equal(192, metric.EvaluatedPoints);
+            Assert.Equal(192, metric.MapeEvaluatedPoints);
+            Assert.Equal(0, metric.ZeroActualExcludedPoints);
+
+            var expectedMae = 4d / 192d;
+            var expectedRmse = Math.Sqrt(8d / 192d);
+            var expectedMape = 40d / 192d;
+
+            Assert.Equal(expectedMae, metric.Mae, 10);
+            Assert.Equal(expectedRmse, metric.Rmse, 10);
+            Assert.Equal(expectedMape, metric.Mape, 10);
+
+            Assert.True(result.SamplePoints.Count > 0);
+            Assert.All(result.SamplePoints, point => Assert.Equal(anchor, point.AnchorUtcTime));
+        }
+        finally
+        {
+            File.Delete(part2Path);
+            File.Delete(predictionsPath);
+        }
+    }
+
+    [Fact]
+    public void RunEvaluation_ExcludesZeroActualsFromMapeAndTracksCounts()
+    {
+        var anchor = new DateTime(2024, 2, 2, 0, 0, 0, DateTimeKind.Utc);
+        var actualTargets = BuildActualTargets(0d);
+        actualTargets[0] = 10d;
+
+        var predictedTargets = BuildPredictions(3d);
+        predictedTargets[0] = 12d;
+
+        var part2Path = CreatePart2Csv([BuildPart2Row(anchor, "Validation", actualTargets)]);
+        var predictionsPath = CreatePredictionsCsv([BuildPredictionRow(anchor, "Validation", "FastTreeRecursive", predictedTargets)]);
+
+        try
+        {
+            var result = Part4Evaluation.RunEvaluation(part2Path, predictionsPath);
+            var metric = Assert.Single(result.Metrics);
+
+            Assert.Equal(192, metric.EvaluatedPoints);
+            Assert.Equal(1, metric.MapeEvaluatedPoints);
+            Assert.Equal(191, metric.ZeroActualExcludedPoints);
+            Assert.Equal(20d, metric.Mape, 10);
+        }
+        finally
+        {
+            File.Delete(part2Path);
+            File.Delete(predictionsPath);
+        }
+    }
+
+    [Fact]
+    public void RunEvaluation_DuplicatePredictionKeys_ThrowsInvalidOperationException()
+    {
+        var anchor = new DateTime(2024, 2, 3, 0, 0, 0, DateTimeKind.Utc);
+        var part2Path = CreatePart2Csv([BuildPart2Row(anchor, "Validation", BuildActualTargets(10d))]);
+        var duplicateRow = BuildPredictionRow(anchor, "Validation", "FastTreeRecursive", BuildPredictions(10d));
+        var predictionsPath = CreatePredictionsCsv([duplicateRow, duplicateRow]);
+
+        try
+        {
+            var ex = Assert.Throws<InvalidOperationException>(() => Part4Evaluation.RunEvaluation(part2Path, predictionsPath));
+            Assert.Contains("Duplicate prediction key", ex.Message);
+        }
+        finally
+        {
+            File.Delete(part2Path);
+            File.Delete(predictionsPath);
+        }
+    }
+
+    [Fact]
+    public void WriteMetricsAndSampleCsv_WritesExpectedHeaders()
+    {
+        var anchor = new DateTime(2024, 2, 4, 0, 0, 0, DateTimeKind.Utc);
+        var part2Path = CreatePart2Csv([BuildPart2Row(anchor, "Validation", BuildActualTargets(10d))]);
+        var predictionsPath = CreatePredictionsCsv([BuildPredictionRow(anchor, "Validation", "FastTreeRecursive", BuildPredictions(10d))]);
+
+        var outputDir = Path.Combine(Path.GetTempPath(), $"part4-tests-{Guid.NewGuid():N}");
+        var metricsPath = Path.Combine(outputDir, "part4_metrics.csv");
+        var samplePath = Path.Combine(outputDir, "part4_sample.csv");
+
+        try
+        {
+            var result = Part4Evaluation.RunEvaluation(part2Path, predictionsPath);
+            Part4Evaluation.WriteMetricsCsv(result, metricsPath);
+            Part4Evaluation.WriteSampleCsv(result, samplePath);
+
+            Assert.True(File.Exists(metricsPath));
+            Assert.True(File.Exists(samplePath));
+
+            var metricsHeader = File.ReadLines(metricsPath).First();
+            Assert.Contains("ModelName", metricsHeader);
+            Assert.Contains("MAE", metricsHeader);
+
+            var sampleHeader = File.ReadLines(samplePath).First();
+            Assert.Contains("ForecastUtcTime", sampleHeader);
+            Assert.Contains("HorizonStep", sampleHeader);
+        }
+        finally
+        {
+            File.Delete(part2Path);
+            File.Delete(predictionsPath);
+            if (Directory.Exists(outputDir))
+            {
+                Directory.Delete(outputDir, true);
+            }
+        }
+    }
+
+    private static string CreatePart2Csv(IReadOnlyList<string> rows)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"part4-part2-{Guid.NewGuid():N}.csv");
+        var header = BuildPart2Header();
+        File.WriteAllText(path, string.Join(Environment.NewLine, new[] { header }.Concat(rows)));
+        return path;
+    }
+
+    private static string CreatePredictionsCsv(IReadOnlyList<string> rows)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"part4-pred-{Guid.NewGuid():N}.csv");
+        var header = BuildPredictionsHeader();
+        File.WriteAllText(path, string.Join(Environment.NewLine, new[] { header }.Concat(rows)));
+        return path;
+    }
+
+    private static string BuildPart2Header()
+    {
+        var firstColumns = new[]
+        {
+            "anchorUtcTime",
+            "TargetAtT",
+            "Temperature",
+            "Windspeed",
+            "SolarIrradiation",
+            "HourOfDay",
+            "MinuteOfHour",
+            "DayOfWeek",
+            "IsHoliday",
+            "HourSin",
+            "HourCos",
+            "WeekdaySin",
+            "WeekdayCos",
+            "TargetLag192",
+            "TargetLag672",
+            "TargetMean16",
+            "TargetStd16",
+            "TargetMean96",
+            "TargetStd96",
+            "Split"
+        };
+
+        var horizon = Enumerable.Range(1, 192).Select(step => $"Target_tPlus{step}");
+        return string.Join(';', firstColumns.Concat(horizon));
+    }
+
+    private static string BuildPredictionsHeader()
+    {
+        var predictedColumns = Enumerable.Range(1, 192).Select(step => $"Pred_tPlus{step}");
+        var actualColumns = Enumerable.Range(1, 192).Select(step => $"Actual_tPlus{step}");
+        return string.Join(';', new[] { "anchorUtcTime", "Split", "Model", "ExogenousFallbackSteps" }
+            .Concat(predictedColumns)
+            .Concat(actualColumns));
+    }
+
+    private static string BuildPart2Row(DateTime anchorUtc, string split, IReadOnlyList<double> actualTargets)
+    {
+        var baseCells = new[]
+        {
+            anchorUtc.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+            "10",
+            "5",
+            "1",
+            "0",
+            "0",
+            "0",
+            "1",
+            "false",
+            "0",
+            "1",
+            "0",
+            "1",
+            "9",
+            "8",
+            "10",
+            "0.1",
+            "10",
+            "0.2",
+            split
+        };
+
+        var horizonCells = actualTargets.Select(value => value.ToString(CultureInfo.InvariantCulture));
+        return string.Join(';', baseCells.Concat(horizonCells));
+    }
+
+    private static string BuildPredictionRow(DateTime anchorUtc, string split, string modelName, IReadOnlyList<double> predictedTargets)
+    {
+        var prefix = new[]
+        {
+            anchorUtc.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+            split,
+            modelName,
+            "0"
+        };
+
+        var predictedCells = predictedTargets.Select(value => value.ToString(CultureInfo.InvariantCulture));
+        var actualCells = Enumerable.Repeat("0", 192);
+        return string.Join(';', prefix.Concat(predictedCells).Concat(actualCells));
+    }
+
+    private static double[] BuildActualTargets(double value)
+    {
+        return Enumerable.Repeat(value, 192).ToArray();
+    }
+
+    private static double[] BuildPredictions(double value, double? step1 = null, double? step2 = null)
+    {
+        var predictions = Enumerable.Repeat(value, 192).ToArray();
+        if (step1.HasValue)
+        {
+            predictions[0] = step1.Value;
+        }
+
+        if (step2.HasValue)
+        {
+            predictions[1] = step2.Value;
+        }
+
+        return predictions;
+    }
+}

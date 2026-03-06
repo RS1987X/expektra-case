@@ -1,5 +1,42 @@
 ﻿using Forecasting.App;
 
+if (args.Length > 0 && string.Equals(args[0], "part4", StringComparison.OrdinalIgnoreCase))
+{
+	var part4InputPath = args.Length > 1 ? args[1] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
+	var part4PredictionsPath = args.Length > 2 ? args[2] : Path.Combine("artifacts", "part3_predictions.csv");
+	var part4MetricsOutputPath = args.Length > 3 ? args[3] : Path.Combine("artifacts", "part4_metrics.csv");
+	var part4SampleOutputPath = args.Length > 4 ? args[4] : Path.Combine("artifacts", "part4_pred_vs_actual_sample.csv");
+
+	if (!File.Exists(part4InputPath))
+	{
+		Console.WriteLine("Part 4 input file not found.");
+		Console.WriteLine($"Input path: {part4InputPath}");
+		return;
+	}
+
+	if (!File.Exists(part4PredictionsPath))
+	{
+		Console.WriteLine("Part 4 predictions file not found.");
+		Console.WriteLine($"Predictions path: {part4PredictionsPath}");
+		return;
+	}
+
+	var part4Result = Part4Evaluation.RunEvaluation(part4InputPath, part4PredictionsPath);
+	Part4Evaluation.WriteMetricsCsv(part4Result, part4MetricsOutputPath);
+	Part4Evaluation.WriteSampleCsv(part4Result, part4SampleOutputPath);
+
+	Console.WriteLine("Part 4 model comparison:");
+	Console.WriteLine("Model\tMAE\tRMSE\tMAPE\tPoints\tMAPEPoints");
+	foreach (var metric in part4Result.Metrics.OrderBy(metric => metric.ModelName, StringComparer.Ordinal))
+	{
+		Console.WriteLine($"{metric.ModelName}\t{metric.Mae:F6}\t{metric.Rmse:F6}\t{metric.Mape:F6}\t{metric.EvaluatedPoints}\t{metric.MapeEvaluatedPoints}");
+	}
+
+	Console.WriteLine($"Saved Part 4 metrics to: {part4MetricsOutputPath}");
+	Console.WriteLine($"Saved Part 4 sample to: {part4SampleOutputPath}");
+	return;
+}
+
 if (args.Length > 0 && string.Equals(args[0], "part3", StringComparison.OrdinalIgnoreCase))
 {
 	var part3InputPath = args.Length > 1 ? args[1] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
