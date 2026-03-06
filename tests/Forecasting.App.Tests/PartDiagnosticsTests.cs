@@ -113,6 +113,7 @@ public class PartDiagnosticsTests
                 "postmodel_residual_summary.csv",
                 "postmodel_bias_by_horizon_bucket.csv",
                 "postmodel_sample_points.csv",
+                "target_over_time.svg",
                 "diagnostics_report.html"
             };
 
@@ -124,7 +125,13 @@ public class PartDiagnosticsTests
             var html = File.ReadAllText(Path.Combine(outputDir, "diagnostics_report.html"));
             Assert.Contains("<svg", html);
             Assert.Contains("Target over time (TargetAtT)", html);
+            Assert.Contains("Time (UTC)", html);
+            Assert.Contains("Target value", html);
             Assert.Contains("Predicted vs actual sampled anchors", html);
+
+            var targetSvg = File.ReadAllText(Path.Combine(outputDir, "target_over_time.svg"));
+            Assert.Contains("Time (UTC)", targetSvg);
+            Assert.Contains("Target value", targetSvg);
         }
         finally
         {

@@ -150,7 +150,15 @@ public static class PartDiagnostics
         WriteResidualSummaryCsv(result, Path.Combine(outputDirectory, "postmodel_residual_summary.csv"));
         WriteHorizonBucketCsv(result, Path.Combine(outputDirectory, "postmodel_bias_by_horizon_bucket.csv"));
         WriteSampleCsv(result, Path.Combine(outputDirectory, "postmodel_sample_points.csv"));
+        WriteTargetSeriesSvg(result, Path.Combine(outputDirectory, "target_over_time.svg"));
         WriteHtmlReport(result, Path.Combine(outputDirectory, "diagnostics_report.html"));
+    }
+
+    public static void WriteTargetSeriesSvg(DiagnosticsRunResult result, string outputSvgPath)
+    {
+        EnsureOutputDirectory(outputSvgPath);
+        var svg = BuildTargetSeriesSvg(result.TargetSeries);
+        File.WriteAllText(outputSvgPath, svg);
     }
 
     public static void WritePreModelSummaryCsv(DiagnosticsRunResult result, string outputCsvPath)
@@ -716,17 +724,73 @@ public static class PartDiagnostics
             return;
         }
 
+        sb.AppendLine(BuildTargetSeriesSvg(targetSeries));
+
+        var splitGroups = targetSeries
+            .GroupBy(point => point.Split)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .ToList();
+        sb.AppendLine($"<p><strong>Splits:</strong> {string.Join(", ", splitGroups.Select(group => Escape(group.Key)))}.</p>");
+    }
+
+    private static string BuildTargetSeriesSvg(IReadOnlyList<DiagnosticsTargetPoint> targetSeries)
+    {
+        const double xMin = 70d;
+        const double xMax = 920d;
+        const double yMin = 20d;
+        const double yMax = 220d;
+        static string F2(double value) => value.ToString("F2", InvariantCulture);
+
         var ordered = targetSeries.OrderBy(point => point.AnchorUtcTime).ToList();
-        var minY = ordered.Min(point => point.TargetAtT);
-        var maxY = ordered.Max(point => point.TargetAtT);
+        var minY = ordered.Count == 0 ? 0d : ordered.Min(point => point.TargetAtT);
+        var maxY = ordered.Count == 0 ? 1d : ordered.Max(point => point.TargetAtT);
         if (Math.Abs(maxY - minY) < 1e-9)
         {
             maxY = minY + 1d;
         }
 
-        sb.AppendLine("<svg viewBox=\"0 0 960 260\" width=\"960\" height=\"260\" role=\"img\" aria-label=\"Target over time\">");
-        sb.AppendLine("<line x1=\"40\" y1=\"220\" x2=\"920\" y2=\"220\" stroke=\"#444\" />");
-        sb.AppendLine("<line x1=\"40\" y1=\"20\" x2=\"40\" y2=\"220\" stroke=\"#444\" />");
+        var svg = new StringBuilder();
+        svg.AppendLine("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 960 260\" width=\"960\" height=\"260\" role=\"img\" aria-label=\"Target over time\">");
+    svg.AppendLine($"<line x1=\"{F2(xMin)}\" y1=\"{F2(yMax)}\" x2=\"{F2(xMax)}\" y2=\"{F2(yMax)}\" stroke=\"#444\" />");
+    svg.AppendLine($"<line x1=\"{F2(xMin)}\" y1=\"{F2(yMin)}\" x2=\"{F2(xMin)}\" y2=\"{F2(yMax)}\" stroke=\"#444\" />");
+
+        var yTickCount = 5;
+        for (var tick = 0; tick <= yTickCount; tick++)
+        {
+            var fraction = tick / (double)yTickCount;
+            var yValue = maxY - fraction * (maxY - minY);
+            var y = yMin + fraction * (yMax - yMin);
+            var yText = yValue.ToString("F0", InvariantCulture);
+            svg.AppendLine($"<line x1=\"{F2(xMin - 5d)}\" y1=\"{F2(y)}\" x2=\"{F2(xMin)}\" y2=\"{F2(y)}\" stroke=\"#666\" />");
+            svg.AppendLine($"<text x=\"{F2(xMin - 8d)}\" y=\"{F2(y + 4d)}\" text-anchor=\"end\" font-size=\"10\" fill=\"#666\">{yText}</text>");
+        }
+
+        if (ordered.Count > 0)
+        {
+            var xTickCount = Math.Min(6, ordered.Count);
+            var seenLabels = new HashSet<string>(StringComparer.Ordinal);
+            for (var tick = 0; tick < xTickCount; tick++)
+            {
+                var index = xTickCount == 1
+                    ? 0
+                    : (int)Math.Round(tick * (ordered.Count - 1d) / (xTickCount - 1d));
+
+                var timestamp = ordered[index].AnchorUtcTime.ToString("yyyy-MM", InvariantCulture);
+                if (!seenLabels.Add(timestamp) && tick < xTickCount - 1)
+                {
+                    continue;
+                }
+
+                var x = xMin + (ordered.Count == 1
+                    ? 0d
+                    : index / (ordered.Count - 1d) * (xMax - xMin));
+                svg.AppendLine($"<line x1=\"{F2(x)}\" y1=\"{F2(yMax)}\" x2=\"{F2(x)}\" y2=\"{F2(yMax + 5d)}\" stroke=\"#666\" />");
+                svg.AppendLine($"<text x=\"{F2(x)}\" y=\"{F2(yMax + 18d)}\" text-anchor=\"middle\" font-size=\"10\" fill=\"#666\">{timestamp}</text>");
+            }
+        }
+
+        svg.AppendLine("<text x=\"495\" y=\"252\" text-anchor=\"middle\" font-size=\"11\" fill=\"#444\">Time (UTC)</text>");
+        svg.AppendLine("<text x=\"18\" y=\"120\" transform=\"rotate(-90,18,120)\" text-anchor=\"middle\" font-size=\"11\" fill=\"#444\">Target value</text>");
 
         var indexedSeries = ordered
             .Select((point, index) => new { Point = point, Index = index + 1 })
@@ -744,13 +808,13 @@ public static class PartDiagnostics
                 .Select(item => (item.Index, item.Point.TargetAtT))
                 .ToList();
 
-            var polyline = BuildIndexedPolyline(points, minY, maxY, ordered.Count);
-            sb.AppendLine($"<polyline points=\"{polyline}\" fill=\"none\" stroke=\"hsl({(splitIndex * 127) % 360} 70% 40%)\" stroke-width=\"1.8\" />");
+            var polyline = BuildIndexedPolyline(points, minY, maxY, Math.Max(ordered.Count, 1));
+            svg.AppendLine($"<polyline points=\"{polyline}\" fill=\"none\" stroke=\"hsl({(splitIndex * 127) % 360} 70% 40%)\" stroke-width=\"1.8\" />");
             splitIndex++;
         }
 
-        sb.AppendLine("</svg>");
-        sb.AppendLine($"<p><strong>Splits:</strong> {string.Join(", ", splitGroups.Select(group => Escape(group.Key)))}.</p>");
+        svg.AppendLine("</svg>");
+        return svg.ToString();
     }
 
     private static void AppendCadenceTable(StringBuilder sb, IReadOnlyList<DiagnosticsCadenceSummary> summaries)
