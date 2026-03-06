@@ -54,6 +54,188 @@ public class Part2FeatureEngineeringTests
         Assert.Equal(1, dataset.Summary.DroppedDuplicateTimestampRows);
     }
 
+    [Fact]
+    public void BuildDataset_SplitsIntoTrainAndValidationAndPurgesBoundaryAnchors()
+    {
+        var rows = BuildSyntheticFeatureRows(1200);
+        var validationStartUtc = rows[900].UtcTime;
+
+        var dataset = Part2FeatureEngineering.BuildDataset(rows, validationStartUtc);
+
+        Assert.Equal(336, dataset.Summary.CandidateAnchors);
+        Assert.Equal(36, dataset.Summary.TrainAnchors);
+        Assert.Equal(108, dataset.Summary.ValidationAnchors);
+        Assert.Equal(192, dataset.Summary.PurgedAnchors);
+        Assert.Equal(144, dataset.Rows.Count);
+
+        Assert.Equal("Train", dataset.Rows[0].Split);
+        Assert.Equal(rows[672].UtcTime, dataset.Rows[0].AnchorUtcTime);
+        Assert.Equal("Train", dataset.Rows[35].Split);
+        Assert.Equal(rows[707].UtcTime, dataset.Rows[35].AnchorUtcTime);
+
+        Assert.Equal("Validation", dataset.Rows[36].Split);
+        Assert.Equal(rows[900].UtcTime, dataset.Rows[36].AnchorUtcTime);
+    }
+
+    [Fact]
+    public void BuildDataset_ReturnsEmptyDatasetForEmptyInput()
+    {
+        var dataset = Part2FeatureEngineering.BuildDataset([]);
+
+        Assert.Empty(dataset.Rows);
+        Assert.Equal(0, dataset.Summary.TotalRows);
+        Assert.Equal(0, dataset.Summary.CandidateAnchors);
+        Assert.Equal(0, dataset.Summary.OutputRows);
+    }
+
+    [Fact]
+    public void BuildDataset_ReturnsEmptyDatasetWhenLookbackAndHorizonRequirementsAreNotMet()
+    {
+        var rows = BuildSyntheticFeatureRows(864);
+
+        var dataset = Part2FeatureEngineering.BuildDataset(rows, rows[^1].UtcTime.AddDays(-30));
+
+        Assert.Empty(dataset.Rows);
+        Assert.Equal(864, dataset.Summary.TotalRows);
+        Assert.Equal(0, dataset.Summary.CandidateAnchors);
+        Assert.Equal(0, dataset.Summary.OutputRows);
+    }
+
+    [Fact]
+    public void ReadFeatureMatrixCsv_ParsesValidRow()
+    {
+        var path = CreateTempCsv(
+            """
+            utcTime;Target;Temperature;Windspeed;SolarIrradiation;HourOfDay;MinuteOfHour;DayOfWeek;IsHoliday;HourSin;HourCos;WeekdaySin;WeekdayCos
+            2024-01-01 00:00:00;1.5;2.5;3.5;4.5;0;0;1;False;0;1;0.5;0.5
+            """);
+
+        try
+        {
+            var rows = Part2FeatureEngineering.ReadFeatureMatrixCsv(path);
+
+            var row = Assert.Single(rows);
+            Assert.Equal(new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), row.UtcTime);
+            Assert.Equal(1.5, row.Target);
+            Assert.False(row.IsHoliday);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ReadFeatureMatrixCsv_ThrowsOnInvalidColumnCount()
+    {
+        var path = CreateTempCsv(
+            """
+            utcTime;Target
+            2024-01-01 00:00:00;1.0
+            """);
+
+        try
+        {
+            Assert.Throws<FormatException>(() => Part2FeatureEngineering.ReadFeatureMatrixCsv(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ReadFeatureMatrixCsv_ThrowsOnInvalidUtcTime()
+    {
+        var path = CreateTempCsv(
+            """
+            utcTime;Target;Temperature;Windspeed;SolarIrradiation;HourOfDay;MinuteOfHour;DayOfWeek;IsHoliday;HourSin;HourCos;WeekdaySin;WeekdayCos
+            invalid-time;1;2;3;4;0;0;1;False;0;1;0.5;0.5
+            """);
+
+        try
+        {
+            Assert.Throws<FormatException>(() => Part2FeatureEngineering.ReadFeatureMatrixCsv(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ReadFeatureMatrixCsv_ThrowsOnInvalidNumeric()
+    {
+        var path = CreateTempCsv(
+            """
+            utcTime;Target;Temperature;Windspeed;SolarIrradiation;HourOfDay;MinuteOfHour;DayOfWeek;IsHoliday;HourSin;HourCos;WeekdaySin;WeekdayCos
+            2024-01-01 00:00:00;not-a-number;2;3;4;0;0;1;False;0;1;0.5;0.5
+            """);
+
+        try
+        {
+            Assert.Throws<FormatException>(() => Part2FeatureEngineering.ReadFeatureMatrixCsv(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ReadFeatureMatrixCsv_ThrowsOnInvalidBool()
+    {
+        var path = CreateTempCsv(
+            """
+            utcTime;Target;Temperature;Windspeed;SolarIrradiation;HourOfDay;MinuteOfHour;DayOfWeek;IsHoliday;HourSin;HourCos;WeekdaySin;WeekdayCos
+            2024-01-01 00:00:00;1;2;3;4;0;0;1;nope;0;1;0.5;0.5
+            """);
+
+        try
+        {
+            Assert.Throws<FormatException>(() => Part2FeatureEngineering.ReadFeatureMatrixCsv(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void WriteDatasetCsvAndSummaryJson_WritesArtifacts()
+    {
+        var rows = BuildSyntheticFeatureRows(900);
+        var dataset = Part2FeatureEngineering.BuildDataset(rows, rows[700].UtcTime);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"part2-tests-{Guid.NewGuid():N}");
+        var csvPath = Path.Combine(outputDir, "part2.csv");
+        var summaryPath = Path.Combine(outputDir, "part2.summary.json");
+
+        try
+        {
+            Part2FeatureEngineering.WriteDatasetCsv(dataset.Rows, csvPath);
+            Part2FeatureEngineering.WriteSummaryJson(dataset.Summary, summaryPath);
+
+            Assert.True(File.Exists(csvPath));
+            Assert.True(File.Exists(summaryPath));
+
+            var csvLines = File.ReadAllLines(csvPath);
+            Assert.True(csvLines.Length >= 2);
+            Assert.Contains("Target_tPlus192", csvLines[0]);
+            Assert.Contains("Validation", csvLines[1]);
+
+            var summaryJson = File.ReadAllText(summaryPath);
+            Assert.Contains("ValidationStartUtc", summaryJson);
+            Assert.Contains("OutputRows", summaryJson);
+        }
+        finally
+        {
+            if (Directory.Exists(outputDir))
+            {
+                Directory.Delete(outputDir, true);
+            }
+        }
+    }
+
     private static List<FeatureRow> BuildSyntheticFeatureRows(int count)
     {
         var rows = new List<FeatureRow>(count);
@@ -89,5 +271,12 @@ public class Part2FeatureEngineeringTests
             Math.Cos(hourAngle),
             Math.Sin(weekdayAngle),
             Math.Cos(weekdayAngle));
+    }
+
+    private static string CreateTempCsv(string content)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"part2-feature-tests-{Guid.NewGuid():N}.csv");
+        File.WriteAllText(path, content.Trim() + Environment.NewLine);
+        return path;
     }
 }

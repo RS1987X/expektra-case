@@ -20,7 +20,7 @@
 
 ## Part 2 follow-up
 
-- Follow-up action: increase branch coverage for `Part2FeatureEngineering` to meet the repository target (>=75% for touched modules, or document baseline/no-regression rationale if not achievable in one change).
-- Follow-up action: add targeted Part 2 tests for split-boundary behavior, including explicit train-anchor coverage and deterministic assertions around the purge zone near validation start.
+- DONE (2026-03-06): increase branch coverage for `Part2FeatureEngineering` to meet the repository target; latest coverage run reports branch-rate ~93.18% for `Part2FeatureEngineering`.
+- DONE (2026-03-06): add targeted Part 2 tests for split-boundary behavior, including explicit train-anchor coverage and deterministic assertions around the purge zone near validation start.
 - Follow-up action: add explicit continuity validation for Part 2 input cadence (expected 15-minute step); fail fast or clearly report when timestamp gaps/irregular intervals would break index-based lag/horizon semantics.
 - Follow-up action: remove or repurpose currently unused `MinutesPerStep` constant in Part 2 implementation to keep the module intentional and warning-free.
