@@ -5,14 +5,15 @@ public static class PipelineCliRequestParser
     public static PipelineRunRequest? BuildRequest(string[] args)
     {
         var pfiHorizonStep = ParseOptionalPfiHorizonStep(args);
+        var maxPart3Rows = ParseOptionalMaxPart3Rows(args);
         var enablePfi = args.Any(a => string.Equals(a, "--pfi", StringComparison.OrdinalIgnoreCase)) || pfiHorizonStep.HasValue;
         var effectivePfiHorizonStep = pfiHorizonStep ?? 1;
         var positionalArgs = ExtractPositionalArgs(args);
 
-        return BuildRequest(positionalArgs, args, enablePfi, effectivePfiHorizonStep);
+        return BuildRequest(positionalArgs, args, enablePfi, effectivePfiHorizonStep, maxPart3Rows);
     }
 
-    private static PipelineRunRequest? BuildRequest(string[] positionalArgs, string[] rawArgs, bool enablePfi, int pfiHorizonStep)
+    private static PipelineRunRequest? BuildRequest(string[] positionalArgs, string[] rawArgs, bool enablePfi, int pfiHorizonStep, int? maxPart3Rows)
     {
         if (positionalArgs.Length == 0 || string.Equals(positionalArgs[0], "all", StringComparison.OrdinalIgnoreCase))
         {
@@ -26,6 +27,7 @@ public static class PipelineCliRequestParser
                 ValidationWindowDays: validationWindowDays,
                 EnablePfi: enablePfi,
                 PfiHorizonStep: pfiHorizonStep,
+                MaxPart3Rows: maxPart3Rows,
                 InputPaths: new Dictionary<string, string>
                 {
                     ["data"] = Path.Combine("data", "testdata.csv"),
@@ -60,6 +62,7 @@ public static class PipelineCliRequestParser
                 ValidationWindowDays: null,
                 EnablePfi: enablePfi,
                 PfiHorizonStep: pfiHorizonStep,
+                MaxPart3Rows: maxPart3Rows,
                 InputPaths: new Dictionary<string, string>
                 {
                     ["part2DatasetCsv"] = diagnosticsInputPath,
@@ -85,6 +88,7 @@ public static class PipelineCliRequestParser
                 ValidationWindowDays: null,
                 EnablePfi: enablePfi,
                 PfiHorizonStep: pfiHorizonStep,
+                MaxPart3Rows: maxPart3Rows,
                 InputPaths: new Dictionary<string, string>
                 {
                     ["part2DatasetCsv"] = part4InputPath,
@@ -113,6 +117,7 @@ public static class PipelineCliRequestParser
                 ValidationWindowDays: null,
                 EnablePfi: enablePfi,
                 PfiHorizonStep: pfiHorizonStep,
+                MaxPart3Rows: maxPart3Rows,
                 InputPaths: new Dictionary<string, string>
                 {
                     ["part2DatasetCsv"] = part3InputPath
@@ -144,6 +149,7 @@ public static class PipelineCliRequestParser
                 ValidationWindowDays: part2ValidationWindowDays,
                 EnablePfi: enablePfi,
                 PfiHorizonStep: pfiHorizonStep,
+                MaxPart3Rows: maxPart3Rows,
                 InputPaths: new Dictionary<string, string>
                 {
                     ["part1FeatureMatrix"] = part2InputPath
@@ -180,6 +186,7 @@ public static class PipelineCliRequestParser
                 ValidationWindowDays: validationWindowDays,
                 EnablePfi: enablePfi,
                 PfiHorizonStep: pfiHorizonStep,
+                MaxPart3Rows: maxPart3Rows,
                 InputPaths: new Dictionary<string, string>
                 {
                     ["data"] = dataPath,
@@ -210,7 +217,8 @@ public static class PipelineCliRequestParser
     {
         var optionsWithValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "--pfi-horizon"
+            "--pfi-horizon",
+            "--max-rows"
         };
 
         var positional = new List<string>();
@@ -279,6 +287,56 @@ public static class PipelineCliRequestParser
         if (!int.TryParse(value, out var parsed) || parsed < 1 || parsed > PipelineConstants.HorizonSteps)
         {
             throw new ArgumentException($"Invalid --pfi-horizon value '{value}'. Expected an integer from 1 to {PipelineConstants.HorizonSteps}.");
+        }
+
+        return parsed;
+    }
+
+    private static int? ParseOptionalMaxPart3Rows(string[] args)
+    {
+        const string flag = "--max-rows";
+        int? parsedValue = null;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            var token = args[index];
+            if (token.StartsWith(flag + "=", StringComparison.OrdinalIgnoreCase))
+            {
+                if (parsedValue.HasValue)
+                {
+                    throw new ArgumentException($"Duplicate '{flag}' option.");
+                }
+
+                parsedValue = ParseMaxPart3RowsValue(token[(flag.Length + 1)..]);
+                continue;
+            }
+
+            if (!string.Equals(token, flag, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (parsedValue.HasValue)
+            {
+                throw new ArgumentException($"Duplicate '{flag}' option.");
+            }
+
+            if (index + 1 >= args.Length)
+            {
+                throw new ArgumentException($"Missing value for '{flag}'. Expected an integer >= 2.");
+            }
+
+            parsedValue = ParseMaxPart3RowsValue(args[++index]);
+        }
+
+        return parsedValue;
+    }
+
+    private static int ParseMaxPart3RowsValue(string value)
+    {
+        if (!int.TryParse(value, out var parsed) || parsed < 2)
+        {
+            throw new ArgumentException($"Invalid --max-rows value '{value}'. Expected an integer >= 2.");
         }
 
         return parsed;
