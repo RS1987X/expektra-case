@@ -434,8 +434,8 @@ public static class Part3Modeling
         // Working timeline for this anchor: start with known past, then append each new prediction so later steps can use it as history.
         var history = new RecursiveHistoryState(model.HistoryTimestamps, model.HistoryValues, baseEndIndex);
 
-        var rolling16 = InitializeRollingWindow(history, anchor.AnchorUtcTime, FeatureConfig.RollingWindowShort, anchor.TargetMean16);
-        var rolling96 = InitializeRollingWindow(history, anchor.AnchorUtcTime, FeatureConfig.RollingWindowLong, anchor.TargetMean96);
+        var rolling16 = InitializeRollingWindow(history, anchor.AnchorUtcTime, FeatureConfig.RollingWindow16, anchor.TargetMean16);
+        var rolling96 = InitializeRollingWindow(history, anchor.AnchorUtcTime, FeatureConfig.RollingWindow96, anchor.TargetMean96);
 
         var lastTemperature = anchor.Temperature;
         var lastWindspeed = anchor.Windspeed;
@@ -468,8 +468,8 @@ public static class Part3Modeling
                 rolling96.Push(targetAtT);
             }
 
-            var lag192 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLagShort * PipelineConstants.MinutesPerStep), anchor.TargetLag192);
-            var lag672 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLagLong * PipelineConstants.MinutesPerStep), anchor.TargetLag672);
+            var lag192 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep), anchor.TargetLag192);
+            var lag672 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep), anchor.TargetLag672);
             var mean16 = rolling16.Mean;
             var std16 = rolling16.Std;
             var mean96 = rolling96.Mean;

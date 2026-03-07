@@ -110,13 +110,9 @@ public static class Part2FeatureEngineering
 
         var effectiveValidationStart = validationStartUtc ?? sorted[^1].UtcTime.AddDays(-PipelineConstants.DefaultValidationWindowDays);
 
-        const int lag192 = FeatureConfig.TargetLagShort;
-        const int lag672 = FeatureConfig.TargetLagLong;
-        const int window16 = FeatureConfig.RollingWindowShort;
-        const int window96 = FeatureConfig.RollingWindowLong;
         // This gate only ensures enough history exists to compute lag/rolling features.
         // Split safety/leakage control is handled later by horizon-based train/validation eligibility and purge.
-        var maxLookback = new[] { lag192, lag672, window16, window96 }.Max();
+        var maxLookback = new[] { FeatureConfig.TargetLag192, FeatureConfig.TargetLag672, FeatureConfig.RollingWindow16, FeatureConfig.RollingWindow96 }.Max();
 
         var lastAnchorIndex = sorted.Count - 1 - PipelineConstants.HorizonSteps;
         if (lastAnchorIndex < maxLookback)
@@ -159,12 +155,12 @@ public static class Part2FeatureEngineering
                 continue;
             }
 
-            var lagValue192 = sorted[anchorIndex - lag192].Target;
-            var lagValue672 = sorted[anchorIndex - lag672].Target;
-            var mean16 = CalculateMean(sorted, anchorIndex - (window16 - 1), anchorIndex);
-            var std16 = CalculatePopulationStd(sorted, anchorIndex - (window16 - 1), anchorIndex, mean16);
-            var mean96 = CalculateMean(sorted, anchorIndex - (window96 - 1), anchorIndex);
-            var std96 = CalculatePopulationStd(sorted, anchorIndex - (window96 - 1), anchorIndex, mean96);
+            var lagValue192 = sorted[anchorIndex - FeatureConfig.TargetLag192].Target;
+            var lagValue672 = sorted[anchorIndex - FeatureConfig.TargetLag672].Target;
+            var mean16 = CalculateMean(sorted, anchorIndex - (FeatureConfig.RollingWindow16 - 1), anchorIndex);
+            var std16 = CalculatePopulationStd(sorted, anchorIndex - (FeatureConfig.RollingWindow16 - 1), anchorIndex, mean16);
+            var mean96 = CalculateMean(sorted, anchorIndex - (FeatureConfig.RollingWindow96 - 1), anchorIndex);
+            var std96 = CalculatePopulationStd(sorted, anchorIndex - (FeatureConfig.RollingWindow96 - 1), anchorIndex, mean96);
 
             var horizonTargets = new double[PipelineConstants.HorizonSteps];
             for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)

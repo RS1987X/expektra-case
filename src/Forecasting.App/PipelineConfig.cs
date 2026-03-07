@@ -15,10 +15,10 @@ public static class PipelineConstants
 /// </summary>
 public static class FeatureConfig
 {
-    public const int TargetLagShort = 192;
-    public const int TargetLagLong = 672;
-    public const int RollingWindowShort = 16;
-    public const int RollingWindowLong = 96;
+    public const int TargetLag192 = 192;
+    public const int TargetLag672 = 672;
+    public const int RollingWindow16 = 16;
+    public const int RollingWindow96 = 96;
 }
 
 /// <summary>

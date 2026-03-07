@@ -50,7 +50,6 @@ public sealed record PreprocessedDataset(
 
 public static class Part1Preprocessing
 {
-    public const int DefaultValidationWindowDays = PipelineConstants.DefaultValidationWindowDays;
     private static readonly CultureInfo SwedishCulture = CultureInfo.GetCultureInfo("sv-SE");
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
     private static readonly string[] AcceptedDateTimeFormats = ["yyyy-MM-dd HH:mm", "yyyy-MM-dd HH:mm:ss"];
@@ -103,7 +102,7 @@ public static class Part1Preprocessing
     public static PreprocessedDataset BuildPreprocessedDatasetForEvaluation(
         string dataCsvPath,
         string holidaysCsvPath,
-        int validationWindowDays = DefaultValidationWindowDays)
+        int validationWindowDays = PipelineConstants.DefaultValidationWindowDays)
     {
         if (validationWindowDays <= 0)
         {
