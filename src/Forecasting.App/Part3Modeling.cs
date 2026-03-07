@@ -76,7 +76,6 @@ public sealed record Part3PfiResult(
 public static class Part3Modeling
 {
     private const int PfiPermutationCount = 10;
-    private const int FeatureCount = 21;
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
 
     private sealed record FeatureDefinition(string Name, Func<FeatureSnapshot, float> Selector);
@@ -133,14 +132,6 @@ public static class Part3Modeling
     /// <summary>Feature names in the same index order as <see cref="ToFeatureVector"/>.</summary>
     public static readonly string[] FeatureNames = FeatureDefinitions.Select(feature => feature.Name).ToArray();
 
-    static Part3Modeling()
-    {
-        if (FeatureDefinitions.Length != FeatureCount)
-        {
-            throw new InvalidOperationException($"Feature definition count mismatch. Expected {FeatureCount}, got {FeatureDefinitions.Length}.");
-        }
-    }
-
     private sealed record SeasonalKey(int DayOfWeek, int HourOfDay, int MinuteOfHour);
 
     private sealed record SeasonalBaselineModel(
@@ -149,7 +140,6 @@ public static class Part3Modeling
 
     private sealed class OneStepTrainingRow
     {
-        [VectorType(FeatureCount)]
         public float[] Features { get; set; } = [];
 
         public float Label { get; set; }
@@ -559,6 +549,7 @@ public static class Part3Modeling
     {
         var schema = SchemaDefinition.Create(typeof(OneStepTrainingRow));
         var featuresColumn = schema[nameof(OneStepTrainingRow.Features)];
+        featuresColumn.ColumnType = new VectorDataViewType(NumberDataViewType.Single, FeatureDefinitions.Length);
         var slotNames = new VBuffer<ReadOnlyMemory<char>>(
             FeatureNames.Length,
             FeatureNames.Select(n => n.AsMemory()).ToArray());
@@ -598,7 +589,8 @@ public static class Part3Modeling
 
         var model = trainer.Fit(dataView);
 
-        var predictionEngine = mlContext.Model.CreatePredictionEngine<OneStepTrainingRow, OneStepPrediction>(model);
+        var predictionEngine = mlContext.Model.CreatePredictionEngine<OneStepTrainingRow, OneStepPrediction>(
+            model, inputSchemaDefinition: schema);
 
         var rowByTimestamp = allRows
             .GroupBy(row => row.AnchorUtcTime)
