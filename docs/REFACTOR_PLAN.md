@@ -70,6 +70,85 @@ This minimizes conflict risk and makes reviews behavior-focused.
 - Keep argument parsing in `Program.cs`.
 - Keep output paths, mode names, and logging semantics unchanged.
 
+### Detailed design (implementation-ready)
+
+- Add `src/Forecasting.App/PipelineRunner.cs`.
+- Introduce a small, explicit orchestration contract:
+  - `PipelineMode` enum: `All`, `Part1`, `Part2`, `Part3`, `Part4`, `Diagnostics`.
+  - `PipelineRunRequest` record: mode + resolved input/output paths + mode options (`ValidationWindowDays`, `EnablePfi`, `PfiHorizonStep`).
+  - `PipelineRunResult` record: status + generated artifact paths + summary lines for console output.
+- Keep path defaulting and CLI parsing in `Program.cs`; pass fully resolved values into the runner.
+- Keep existing part modules unchanged in this phase (`Part1Preprocessing`, `Part2FeatureEngineering`, `Part3Modeling`, `Part4Evaluation`, `PartDiagnostics`).
+
+### Ownership boundaries
+
+- `Program.cs` owns:
+  - CLI argument parsing and syntax validation.
+  - Mapping parsed args to `PipelineRunRequest`.
+  - Rendering final user-facing console lines from `PipelineRunResult`.
+- `PipelineRunner` owns:
+  - mode orchestration and part handoff.
+  - required input file presence checks per mode.
+  - ordering of artifact generation and write calls.
+  - run-manifest emission for modes that currently produce manifests.
+- Part modules own:
+  - domain logic and transformations.
+  - artifact serialization already encapsulated in each module.
+
+### Error-handling parity rules
+
+- Preserve existing missing-file behavior: report the missing path and exit without unhandled exceptions.
+- Preserve validation ordering (check required inputs before executing a part).
+- Keep message shape stable in this phase unless a correction is required.
+
+### Migration steps (small diffs)
+
+1. Extract `all` mode to `PipelineRunner.RunAll(...)`.
+2. Extract `diagnostics` mode to `PipelineRunner.RunDiagnostics(...)`.
+3. Extract `part4` mode to `PipelineRunner.RunPart4(...)`.
+4. Extract `part3` mode to `PipelineRunner.RunPart3(...)`.
+5. Extract `part2` mode to `PipelineRunner.RunPart2(...)`.
+6. Extract `part1` mode to `PipelineRunner.RunPart1(...)`.
+7. Leave `Program.cs` as a thin dispatcher over parsed requests.
+
+### Non-goals (explicitly out of scope)
+
+- No model abstraction (`IForecastingModel`) in Phase 1.
+- No feature-schema redesign in Phase 1.
+- No artifact CSV/header/order changes in Phase 1.
+- No DI container or broad infra rewiring in Phase 1.
+
+### Acceptance test matrix for Phase 1
+
+- `all` mode:
+  - succeeds with valid inputs.
+  - writes Part1/Part2/Part3/Part4/diagnostics artifacts.
+  - emits expected completion markers.
+- `part1` mode:
+  - fails gracefully when data/holidays path is missing.
+  - succeeds and writes feature + audit artifacts.
+- `part2` mode:
+  - fails gracefully when Part1 input is missing.
+  - succeeds and writes supervised matrix + summary.
+- `part3` mode:
+  - fails gracefully when Part2 input is missing.
+  - succeeds and writes predictions + summary (+ optional PFI when enabled).
+- `part4` mode:
+  - fails gracefully when inputs are missing.
+  - succeeds and writes metrics + sample.
+- `diagnostics` mode:
+  - fails gracefully when inputs are missing.
+  - succeeds and writes diagnostics artifacts.
+
+### Exit evidence to include in PR
+
+- Before/after behavior notes per mode.
+- Test additions/updates for mode orchestration behavior.
+- Command output summary for:
+  - `dotnet build ExpekraCase.sln`
+  - `dotnet test ExpekraCase.sln`
+  - `dotnet test ExpekraCase.sln --collect:"XPlat Code Coverage"`
+
 ### Exit criteria
 
 - `Program.cs` becomes a thin dispatcher.
@@ -134,8 +213,10 @@ This minimizes conflict risk and makes reviews behavior-focused.
 
 ## Practical Next Step
 
-Start with Phase 0 in a dedicated branch from `master`, for example:
+Phase 0 is completed on this branch.
 
-- `refactor/phase0-safety-net`
+Start Phase 1 in a dedicated branch from `master`, for example:
 
-Then proceed sequentially with phase branches.
+- `refactor/phase1-orchestration-extraction`
+
+Then proceed sequentially with Phase 2+ branches.
