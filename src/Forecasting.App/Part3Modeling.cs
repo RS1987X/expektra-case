@@ -212,6 +212,75 @@ public static class Part3Modeling
         DateTime[] HistoryTimestamps,
         double[] HistoryValues);
 
+    private interface IForecastingModel
+    {
+        string ModelName { get; }
+
+        void Train(IReadOnlyList<Part3InputRow> trainRows, IReadOnlyList<Part3InputRow> allRows);
+
+        (double[] Predictions, int FallbackSteps) Predict(Part3InputRow anchor);
+    }
+
+    private interface IPermutationImportanceModel
+    {
+        Part3PfiResult? ComputePermutationImportance(IReadOnlyList<Part3InputRow> validationRows, int pfiHorizonStep);
+    }
+
+    private sealed class BaselineSeasonalForecastingModel : IForecastingModel
+    {
+        private SeasonalBaselineModel? _model;
+
+        public string ModelName => "BaselineSeasonal";
+
+        public void Train(IReadOnlyList<Part3InputRow> trainRows, IReadOnlyList<Part3InputRow> allRows)
+        {
+            _model = BuildSeasonalBaseline(trainRows);
+        }
+
+        public (double[] Predictions, int FallbackSteps) Predict(Part3InputRow anchor)
+        {
+            return PredictWithBaseline(anchor.AnchorUtcTime, RequireModel());
+        }
+
+        private SeasonalBaselineModel RequireModel()
+        {
+            return _model ?? throw new InvalidOperationException($"Model '{ModelName}' must be trained before prediction.");
+        }
+    }
+
+    private sealed class FastTreeRecursiveForecastingModel : IForecastingModel, IPermutationImportanceModel
+    {
+        private readonly FastTreeOptions _options;
+        private FastTreeRecursiveModel? _model;
+
+        public FastTreeRecursiveForecastingModel(FastTreeOptions options)
+        {
+            _options = options;
+        }
+
+        public string ModelName => "FastTreeRecursive";
+
+        public void Train(IReadOnlyList<Part3InputRow> trainRows, IReadOnlyList<Part3InputRow> allRows)
+        {
+            _model = BuildFastTreeRecursiveModel(trainRows, allRows, _options);
+        }
+
+        public (double[] Predictions, int FallbackSteps) Predict(Part3InputRow anchor)
+        {
+            return PredictWithFastTreeRecursive(anchor, RequireModel());
+        }
+
+        public Part3PfiResult? ComputePermutationImportance(IReadOnlyList<Part3InputRow> validationRows, int pfiHorizonStep)
+        {
+            return Part3Modeling.ComputePermutationImportance(RequireModel(), validationRows, pfiHorizonStep);
+        }
+
+        private FastTreeRecursiveModel RequireModel()
+        {
+            return _model ?? throw new InvalidOperationException($"Model '{ModelName}' must be trained before prediction.");
+        }
+    }
+
     private sealed class RollingWindowStats
     {
         private readonly Queue<double> _values;
@@ -470,50 +539,63 @@ public static class Part3Modeling
             throw new InvalidOperationException("Part 3 requires at least one validation row (Split=Validation).");
         }
 
-        var baselineModel = BuildSeasonalBaseline(trainRows);
-        var fastTreeModel = BuildFastTreeRecursiveModel(trainRows, sorted, fastTreeOptions ?? new FastTreeOptions());
+        var modelRegistry = CreateModelRegistry(fastTreeOptions ?? new FastTreeOptions());
+        foreach (var model in modelRegistry)
+        {
+            model.Train(trainRows, sorted);
+        }
 
         // Compute PFI on validation data only when explicitly requested (it is expensive).
-        var pfiResult = enablePfi ? ComputePermutationImportance(fastTreeModel, validationRows, pfiHorizonStep) : null;
+        var pfiModel = modelRegistry.OfType<IPermutationImportanceModel>().FirstOrDefault();
+        var pfiResult = enablePfi && pfiModel is not null
+            ? pfiModel.ComputePermutationImportance(validationRows, pfiHorizonStep)
+            : null;
 
-        var forecasts = new List<Part3ForecastRow>(forecastAnchors.Count * 2);
-        var baselineFallbackSteps = 0;
-        var fastTreeFallbackSteps = 0;
+        var forecasts = new List<Part3ForecastRow>(forecastAnchors.Count * modelRegistry.Count);
+        var fallbackStepsByModel = modelRegistry.ToDictionary(model => model.ModelName, _ => 0, StringComparer.Ordinal);
 
         foreach (var anchor in forecastAnchors)
         {
-            var baseline = PredictWithBaseline(anchor.AnchorUtcTime, baselineModel);
-            baselineFallbackSteps += baseline.FallbackSteps;
-            forecasts.Add(new Part3ForecastRow(
-                anchor.AnchorUtcTime,
-                anchor.Split,
-                "BaselineSeasonal",
-                baseline.FallbackSteps,
-                baseline.Predictions,
-                anchor.HorizonTargets));
+            foreach (var model in modelRegistry)
+            {
+                var prediction = model.Predict(anchor);
+                fallbackStepsByModel[model.ModelName] += prediction.FallbackSteps;
 
-            var fastTree = PredictWithFastTreeRecursive(anchor, fastTreeModel);
-            fastTreeFallbackSteps += fastTree.FallbackSteps;
-            forecasts.Add(new Part3ForecastRow(
-                anchor.AnchorUtcTime,
-                anchor.Split,
-                "FastTreeRecursive",
-                fastTree.FallbackSteps,
-                fastTree.Predictions,
-                anchor.HorizonTargets));
+                forecasts.Add(new Part3ForecastRow(
+                    anchor.AnchorUtcTime,
+                    anchor.Split,
+                    model.ModelName,
+                    prediction.FallbackSteps,
+                    prediction.Predictions,
+                    anchor.HorizonTargets));
+            }
         }
+
+        var modelSummaries = modelRegistry
+            .Select(model => new Part3ModelSummary(
+                model.ModelName,
+                forecastAnchors.Count,
+                PipelineConstants.HorizonSteps,
+                fallbackStepsByModel[model.ModelName]))
+            .ToList();
 
         var summary = new Part3RunSummary(
             DateTime.UtcNow,
             sorted.Count,
             trainRows.Count,
             validationRows.Count,
-            [
-                new Part3ModelSummary("BaselineSeasonal", forecastAnchors.Count, PipelineConstants.HorizonSteps, baselineFallbackSteps),
-                new Part3ModelSummary("FastTreeRecursive", forecastAnchors.Count, PipelineConstants.HorizonSteps, fastTreeFallbackSteps)
-            ]);
+            modelSummaries);
 
         return new Part3RunResult(forecasts, summary, pfiResult);
+    }
+
+    private static List<IForecastingModel> CreateModelRegistry(FastTreeOptions fastTreeOptions)
+    {
+        return
+        [
+            new BaselineSeasonalForecastingModel(),
+            new FastTreeRecursiveForecastingModel(fastTreeOptions)
+        ];
     }
 
     public static void WriteForecastsCsv(IReadOnlyList<Part3ForecastRow> forecasts, string outputCsvPath)
