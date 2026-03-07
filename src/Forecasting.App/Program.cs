@@ -1,4 +1,6 @@
-﻿using Forecasting.App;
+﻿using System.Diagnostics;
+using System.Text.Json;
+using Forecasting.App;
 
 var pfiHorizonStep = ParseOptionalPfiHorizonStep(args);
 var enablePfi = args.Any(a => string.Equals(a, "--pfi", StringComparison.OrdinalIgnoreCase)) || pfiHorizonStep.HasValue;
@@ -67,6 +69,32 @@ if (positionalArgs.Length == 0 || (positionalArgs.Length > 0 && string.Equals(po
 	var diagnosticsResult = PartDiagnostics.RunDiagnostics(part2OutputPath, part3OutputPath, part3PfiOutputPath);
 	PartDiagnostics.WriteArtifacts(diagnosticsResult, diagnosticsOutputDirectory);
 	Console.WriteLine($"Diagnostics complete: {diagnosticsOutputDirectory}");
+	WriteRunManifest(
+		outputDirectory: "artifacts",
+		mode: "all",
+		rawArgs: args,
+		validationWindowDays: allValidationWindowDays,
+		enablePfi: enablePfi,
+		pfiHorizonStep: effectivePfiHorizonStep,
+		inputPaths: new Dictionary<string, string>
+		{
+			["data"] = dataPath,
+			["holidays"] = holidaysPath
+		},
+		outputPaths: new Dictionary<string, string>
+		{
+			["part1FeatureMatrix"] = part1OutputPath,
+			["part1AuditCsv"] = part1AuditOutputPath,
+			["part1AuditSummaryJson"] = part1AuditSummaryOutputPath,
+			["part2DatasetCsv"] = part2OutputPath,
+			["part2SummaryJson"] = part2SummaryPath,
+			["part3PredictionsCsv"] = part3OutputPath,
+			["part3SummaryJson"] = part3SummaryPath,
+			["part3FeatureImportanceCsv"] = part3PfiOutputPath,
+			["part4MetricsCsv"] = part4MetricsOutputPath,
+			["part4SampleCsv"] = part4SampleOutputPath,
+			["diagnosticsDirectory"] = diagnosticsOutputDirectory
+		});
 	return;
 }
 
@@ -178,6 +206,23 @@ if (positionalArgs.Length > 0 && string.Equals(positionalArgs[0], "part3", Strin
 	Console.WriteLine($"Generated {part3Result.Forecasts.Count} forecast rows.");
 	Console.WriteLine($"Saved Part 3 predictions to: {part3OutputPath}");
 	Console.WriteLine($"Saved Part 3 summary to: {part3SummaryPath}");
+	WriteRunManifest(
+		outputDirectory: Path.GetDirectoryName(part3OutputPath) ?? "artifacts",
+		mode: "part3",
+		rawArgs: args,
+		validationWindowDays: null,
+		enablePfi: enablePfi,
+		pfiHorizonStep: effectivePfiHorizonStep,
+		inputPaths: new Dictionary<string, string>
+		{
+			["part2DatasetCsv"] = part3InputPath
+		},
+		outputPaths: new Dictionary<string, string>
+		{
+			["part3PredictionsCsv"] = part3OutputPath,
+			["part3SummaryJson"] = part3SummaryPath,
+			["part3FeatureImportanceCsv"] = Path.Combine(Path.GetDirectoryName(part3OutputPath) ?? "artifacts", "part3_feature_importance.csv")
+		});
 	return;
 }
 
@@ -342,4 +387,83 @@ static int ParsePfiHorizonValue(string value)
 	}
 
 	return parsed;
+}
+
+static void WriteRunManifest(
+	string outputDirectory,
+	string mode,
+	string[] rawArgs,
+	int? validationWindowDays,
+	bool enablePfi,
+	int pfiHorizonStep,
+	IReadOnlyDictionary<string, string> inputPaths,
+	IReadOnlyDictionary<string, string> outputPaths)
+{
+	Directory.CreateDirectory(outputDirectory);
+
+	var fastTreeOptions = new FastTreeOptions();
+	var manifest = new
+	{
+		GeneratedAtUtc = DateTime.UtcNow,
+		Mode = mode,
+		RawArgs = rawArgs,
+		ValidationWindowDays = validationWindowDays,
+		Pfi = new
+		{
+			Enabled = enablePfi,
+			HorizonStep = enablePfi ? (int?)pfiHorizonStep : null
+		},
+		Pipeline = new
+		{
+			PipelineConstants.HorizonSteps,
+			PipelineConstants.MinutesPerStep,
+			PipelineConstants.DefaultValidationWindowDays
+		},
+		FastTreeOptions = fastTreeOptions,
+		InputPaths = inputPaths,
+		OutputPaths = outputPaths,
+		Git = new
+		{
+			Branch = TryRunGitCommand("rev-parse --abbrev-ref HEAD"),
+			Commit = TryRunGitCommand("rev-parse --short HEAD")
+		}
+	};
+
+	var outputPath = Path.Combine(outputDirectory, "run_manifest.json");
+	var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
+	File.WriteAllText(outputPath, json);
+}
+
+static string? TryRunGitCommand(string arguments)
+{
+	try
+	{
+		var startInfo = new ProcessStartInfo("git", arguments)
+		{
+			RedirectStandardOutput = true,
+			RedirectStandardError = true,
+			UseShellExecute = false,
+			CreateNoWindow = true
+		};
+
+		using var process = Process.Start(startInfo);
+		if (process is null)
+		{
+			return null;
+		}
+
+		var output = process.StandardOutput.ReadToEnd();
+		process.WaitForExit();
+		if (process.ExitCode != 0)
+		{
+			return null;
+		}
+
+		var trimmed = output.Trim();
+		return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+	}
+	catch
+	{
+		return null;
+	}
 }
