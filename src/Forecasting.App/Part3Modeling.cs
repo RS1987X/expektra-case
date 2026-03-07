@@ -132,13 +132,69 @@ public static class Part3Modeling
     /// <summary>Feature names in the same index order as <see cref="ToFeatureVector"/>.</summary>
     public static readonly string[] FeatureNames = FeatureDefinitions.Select(feature => feature.Name).ToArray();
 
+    private const int DaysPerWeek = 7;
+    private const int HoursPerDay = 24;
+    private const int MinutesPerHour = 60;
+    private static readonly int SlotsPerHour = GetSlotsPerHour();
+    private static readonly int SlotsPerDay = HoursPerDay * SlotsPerHour;
+
+    /// <summary>Pre-computed sin/cos cyclic encodings for each model cadence slot in a week.</summary>
+    private static readonly (float HourSin, float HourCos, float WeekdaySin, float WeekdayCos)[] CyclicLookup = BuildCyclicLookup();
+
+    private static int GetSlotsPerHour()
+    {
+        if (MinutesPerHour % PipelineConstants.MinutesPerStep != 0)
+        {
+            throw new InvalidOperationException(
+                $"MinutesPerStep ({PipelineConstants.MinutesPerStep}) must evenly divide {MinutesPerHour} to build cyclic lookup.");
+        }
+
+        return MinutesPerHour / PipelineConstants.MinutesPerStep;
+    }
+
+    private static (float, float, float, float)[] BuildCyclicLookup()
+    {
+        var table = new (float, float, float, float)[DaysPerWeek * SlotsPerDay];
+        for (var day = 0; day < DaysPerWeek; day++)
+        {
+            var weekdayAngle = 2d * Math.PI * (day / (double)DaysPerWeek);
+            var wSin = (float)Math.Sin(weekdayAngle);
+            var wCos = (float)Math.Cos(weekdayAngle);
+            for (var hour = 0; hour < HoursPerDay; hour++)
+            {
+                var hourAngle = 2d * Math.PI * (hour / (double)HoursPerDay);
+                var hSin = (float)Math.Sin(hourAngle);
+                var hCos = (float)Math.Cos(hourAngle);
+                for (var slot = 0; slot < SlotsPerHour; slot++)
+                {
+                    table[day * SlotsPerDay + hour * SlotsPerHour + slot] = (hSin, hCos, wSin, wCos);
+                }
+            }
+        }
+
+        return table;
+    }
+
+    private static int GetCyclicLookupIndex(DateTime timestamp)
+    {
+        if (timestamp.Minute % PipelineConstants.MinutesPerStep != 0)
+        {
+            throw new InvalidOperationException(
+                $"Timestamp minute ({timestamp.Minute}) is not aligned to {PipelineConstants.MinutesPerStep}-minute cadence.");
+        }
+
+        var dayOfWeek = (int)timestamp.DayOfWeek;
+        var slotWithinHour = timestamp.Minute / PipelineConstants.MinutesPerStep;
+        return dayOfWeek * SlotsPerDay + timestamp.Hour * SlotsPerHour + slotWithinHour;
+    }
+
     private sealed record SeasonalKey(int DayOfWeek, int HourOfDay, int MinuteOfHour);
 
     private sealed record SeasonalBaselineModel(
         IReadOnlyDictionary<SeasonalKey, double> Means,
         double GlobalMean);
 
-    private sealed class OneStepTrainingRow
+    private sealed class OneStepModelInput
     {
         public float[] Features { get; set; } = [];
 
@@ -153,7 +209,7 @@ public static class Part3Modeling
     private sealed record FastTreeRecursiveModel(
         MLContext MlContext,
         ITransformer Transformer,
-        PredictionEngine<OneStepTrainingRow, OneStepPrediction> PredictionEngine,
+        PredictionEngine<OneStepModelInput, OneStepPrediction> PredictionEngine,
         IReadOnlyDictionary<DateTime, Part3InputRow> RowByTimestamp,
         DateTime[] HistoryTimestamps,
         double[] HistoryValues);
@@ -202,19 +258,26 @@ public static class Part3Modeling
         }
     }
 
+    /// <summary>
+    /// Maintains a view of history truncated at the anchor time, plus predicted values appended
+    /// during recursive inference. The constructor physically slices the base arrays so that
+    /// future actual targets are never accessible — preventing accidental leakage even if new
+    /// code is added that indexes into the arrays without a length guard.
+    /// </summary>
     private sealed class RecursiveHistoryState
     {
         private readonly DateTime[] _baseTimestamps;
         private readonly double[] _baseValues;
-        private readonly int _baseLength;
         private readonly List<DateTime> _predictedTimestamps = new(PipelineConstants.HorizonSteps);
         private readonly List<double> _predictedValues = new(PipelineConstants.HorizonSteps);
 
         public RecursiveHistoryState(DateTime[] baseTimestamps, double[] baseValues, int baseEndIndex)
         {
-            _baseTimestamps = baseTimestamps;
-            _baseValues = baseValues;
-            _baseLength = Math.Max(0, baseEndIndex + 1);
+            // Physically slice so that _baseTimestamps/Values.Length == usable length.
+            // This makes it structurally impossible to read actual targets past the anchor.
+            var length = Math.Max(0, baseEndIndex + 1);
+            _baseTimestamps = baseTimestamps.AsSpan(0, length).ToArray();
+            _baseValues = baseValues.AsSpan(0, length).ToArray();
         }
 
         public double GetValueAtOrBefore(DateTime timestamp, double fallback)
@@ -225,7 +288,7 @@ public static class Part3Modeling
                 return _predictedValues[predictedIndex];
             }
 
-            var baseIndex = UpperBound(_baseTimestamps, _baseLength, timestamp) - 1;
+            var baseIndex = UpperBound(_baseTimestamps, _baseTimestamps.Length, timestamp) - 1;
             return baseIndex >= 0 ? _baseValues[baseIndex] : fallback;
         }
 
@@ -233,6 +296,31 @@ public static class Part3Modeling
         {
             _predictedTimestamps.Add(timestamp);
             _predictedValues.Add(value);
+        }
+
+        /// <summary>
+        /// Fills a rolling window using sequential index walking instead of repeated binary searches.
+        /// Finds the base index for <paramref name="endTimestamp"/> once, then steps backwards
+        /// through the sorted base values for each window slot.
+        /// </summary>
+        public RollingWindowStats InitializeRollingWindow(DateTime endTimestamp, int windowSteps, double fallback)
+        {
+            var window = new RollingWindowStats(windowSteps);
+
+            // Find the base index for the end timestamp (rightmost position ≤ endTimestamp).
+            var endIndex = UpperBound(_baseTimestamps, _baseTimestamps.Length, endTimestamp) - 1;
+
+            // Walk backwards from endIndex to fill the window oldest-first.
+            // Offset 0 = oldest slot, offset (windowSteps-1) = newest slot (at endTimestamp).
+            for (var slot = 0; slot < windowSteps; slot++)
+            {
+                var targetOffset = windowSteps - 1 - slot; // distance from endTimestamp
+                var idx = endIndex - targetOffset;
+                var value = idx >= 0 ? _baseValues[idx] : fallback;
+                window.AddInitial(value);
+            }
+
+            return window;
         }
     }
 
@@ -310,7 +398,7 @@ public static class Part3Modeling
         return rows;
     }
 
-    public static Part3RunResult RunModels(IReadOnlyList<Part3InputRow> rows, FastTreeOptions? fastTreeOptions = null)
+    public static Part3RunResult RunModels(IReadOnlyList<Part3InputRow> rows, FastTreeOptions? fastTreeOptions = null, bool enablePfi = false)
     {
         var sorted = rows.OrderBy(row => row.AnchorUtcTime).ToList();
         var trainRows = sorted.Where(row => string.Equals(row.Split, "Train", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -329,8 +417,8 @@ public static class Part3Modeling
         var baselineModel = BuildSeasonalBaseline(trainRows);
         var fastTreeModel = BuildFastTreeRecursiveModel(trainRows, sorted, fastTreeOptions ?? new FastTreeOptions());
 
-        // Compute PFI on validation data using the trained FastTree model.
-        var pfiResult = ComputePermutationImportance(fastTreeModel, validationRows);
+        // Compute PFI on validation data only when explicitly requested (it is expensive).
+        var pfiResult = enablePfi ? ComputePermutationImportance(fastTreeModel, validationRows) : null;
 
         var forecastAnchors = sorted
             .Where(row => string.Equals(row.Split, "Train", StringComparison.OrdinalIgnoreCase)
@@ -460,7 +548,7 @@ public static class Part3Modeling
         }
 
         var validationData = validationRows
-            .Select(row => new OneStepTrainingRow
+            .Select(row => new OneStepModelInput
             {
                 Features = ToFeatureVector(row),
                 Label = (float)row.HorizonTargets[0]
@@ -473,7 +561,7 @@ public static class Part3Modeling
         var pfi = model.MlContext.Regression.PermutationFeatureImportance(
             model.Transformer,
             dataView,
-            labelColumnName: nameof(OneStepTrainingRow.Label),
+            labelColumnName: nameof(OneStepModelInput.Label),
             permutationCount: PfiPermutationCount,
             useFeatureWeightFilter: false);
 
@@ -541,14 +629,14 @@ public static class Part3Modeling
     }
 
     /// <summary>
-    /// Builds a <see cref="SchemaDefinition"/> for <see cref="OneStepTrainingRow"/>
+    /// Builds a <see cref="SchemaDefinition"/> for <see cref="OneStepModelInput"/>
     /// that annotates the Features vector column with slot names from <see cref="FeatureNames"/>.
     /// This enables ML.NET's <c>PermutationFeatureImportance</c> to resolve per-feature slots.
     /// </summary>
     private static SchemaDefinition BuildTrainingRowSchemaDefinition()
     {
-        var schema = SchemaDefinition.Create(typeof(OneStepTrainingRow));
-        var featuresColumn = schema[nameof(OneStepTrainingRow.Features)];
+        var schema = SchemaDefinition.Create(typeof(OneStepModelInput));
+        var featuresColumn = schema[nameof(OneStepModelInput.Features)];
         featuresColumn.ColumnType = new VectorDataViewType(NumberDataViewType.Single, FeatureDefinitions.Length);
         var slotNames = new VBuffer<ReadOnlyMemory<char>>(
             FeatureNames.Length,
@@ -568,7 +656,7 @@ public static class Part3Modeling
         var mlContext = new MLContext(seed: options.Seed);
 
         var trainingData = trainRows
-            .Select(row => new OneStepTrainingRow
+            .Select(row => new OneStepModelInput
             {
                 Features = ToFeatureVector(row),
                 Label = (float)row.HorizonTargets[0]
@@ -579,8 +667,8 @@ public static class Part3Modeling
         var dataView = mlContext.Data.LoadFromEnumerable(trainingData, schema);
         var trainer = mlContext.Regression.Trainers.FastTree(new Microsoft.ML.Trainers.FastTree.FastTreeRegressionTrainer.Options
         {
-            FeatureColumnName = nameof(OneStepTrainingRow.Features),
-            LabelColumnName = nameof(OneStepTrainingRow.Label),
+            FeatureColumnName = nameof(OneStepModelInput.Features),
+            LabelColumnName = nameof(OneStepModelInput.Label),
             NumberOfTrees = options.NumberOfTrees,
             NumberOfLeaves = options.NumberOfLeaves,
             MinimumExampleCountPerLeaf = options.MinimumExampleCountPerLeaf,
@@ -589,7 +677,7 @@ public static class Part3Modeling
 
         var model = trainer.Fit(dataView);
 
-        var predictionEngine = mlContext.Model.CreatePredictionEngine<OneStepTrainingRow, OneStepPrediction>(
+        var predictionEngine = mlContext.Model.CreatePredictionEngine<OneStepModelInput, OneStepPrediction>(
             model, inputSchemaDefinition: schema);
 
         var rowByTimestamp = allRows
@@ -619,23 +707,19 @@ public static class Part3Modeling
         // Working timeline for this anchor: start with known past, then append each new prediction so later steps can use it as history.
         var history = new RecursiveHistoryState(model.HistoryTimestamps, model.HistoryValues, baseEndIndex);
 
-        var rolling16Lag192 = InitializeRollingWindow(
-            history,
+        var targetLag192Rolling16 = history.InitializeRollingWindow(
             anchor.AnchorUtcTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep),
             FeatureConfig.RollingWindow16,
             anchor.TargetLag192Mean16);
-        var rolling96Lag192 = InitializeRollingWindow(
-            history,
+        var targetLag192Rolling96 = history.InitializeRollingWindow(
             anchor.AnchorUtcTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep),
             FeatureConfig.RollingWindow96,
             anchor.TargetLag192Mean96);
-        var rolling16Lag672 = InitializeRollingWindow(
-            history,
+        var targetLag672Rolling16 = history.InitializeRollingWindow(
             anchor.AnchorUtcTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep),
             FeatureConfig.RollingWindow16,
             anchor.TargetLag672Mean16);
-        var rolling96Lag672 = InitializeRollingWindow(
-            history,
+        var targetLag672Rolling96 = history.InitializeRollingWindow(
             anchor.AnchorUtcTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep),
             FeatureConfig.RollingWindow96,
             anchor.TargetLag672Mean96);
@@ -643,6 +727,10 @@ public static class Part3Modeling
         var lastTemperature = anchor.Temperature;
         var lastWindspeed = anchor.Windspeed;
         var lastSolar = anchor.SolarIrradiation;
+
+        // Reuse a single training row and feature array across all 192 steps to avoid ~14M allocations.
+        var features = new float[FeatureDefinitions.Length];
+        var reusableRow = new OneStepModelInput { Features = features };
 
         for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
         {
@@ -664,63 +752,46 @@ public static class Part3Modeling
 
             var targetAtT = history.GetValueAtOrBefore(currentTime, anchor.TargetAtT);
 
-            var lag192 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep), anchor.TargetLag192);
-            var lag672 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep), anchor.TargetLag672);
+            var targetLag192 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep), anchor.TargetLag192);
+            var targetLag672 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep), anchor.TargetLag672);
             if (step > 1)
             {
                 // Keep rolling windows aligned with their lagged timelines (t-192 and t-672).
-                rolling16Lag192.Push(lag192);
-                rolling96Lag192.Push(lag192);
-                rolling16Lag672.Push(lag672);
-                rolling96Lag672.Push(lag672);
+                targetLag192Rolling16.Push(targetLag192);
+                targetLag192Rolling96.Push(targetLag192);
+                targetLag672Rolling16.Push(targetLag672);
+                targetLag672Rolling96.Push(targetLag672);
             }
-
-            var mean16 = rolling16Lag192.Mean;
-            var std16 = rolling16Lag192.Std;
-            var mean96 = rolling96Lag192.Mean;
-            var std96 = rolling96Lag192.Std;
-            var mean16Lag672 = rolling16Lag672.Mean;
-            var std16Lag672 = rolling16Lag672.Std;
-            var mean96Lag672 = rolling96Lag672.Mean;
-            var std96Lag672 = rolling96Lag672.Std;
 
             var hour = currentTime.Hour;
             var minute = currentTime.Minute;
             var dayOfWeek = (int)currentTime.DayOfWeek;
-            // Encode hour/day-of-week as sin/cos cycles so boundary neighbors stay close (23↔0, Sunday↔Monday).
-            var hourAngle = 2d * Math.PI * (hour / 24d);
-            var weekdayAngle = 2d * Math.PI * (dayOfWeek / 7d);
-            var hourSin = Math.Sin(hourAngle);
-            var hourCos = Math.Cos(hourAngle);
-            var weekdaySin = Math.Sin(weekdayAngle);
-            var weekdayCos = Math.Cos(weekdayAngle);
-            var isHoliday = hasContext && contextRow!.IsHoliday;
+            var cyclic = CyclicLookup[GetCyclicLookupIndex(currentTime)];
 
-            var features = ToFeatureVector(new FeatureSnapshot(
-                targetAtT,
-                temperature,
-                windspeed,
-                solar,
-                hour,
-                minute,
-                dayOfWeek,
-                isHoliday,
-                hourSin,
-                hourCos,
-                weekdaySin,
-                weekdayCos,
-                lag192,
-                lag672,
-                mean16,
-                std16,
-                mean96,
-                std96,
-                mean16Lag672,
-                std16Lag672,
-                mean96Lag672,
-                std96Lag672));
+            // Fill feature vector directly (must stay in sync with FeatureDefinitions order).
+            features[0] = (float)temperature;
+            features[1] = (float)windspeed;
+            features[2] = (float)solar;
+            features[3] = hour;
+            features[4] = minute;
+            features[5] = dayOfWeek;
+            features[6] = hasContext && contextRow!.IsHoliday ? 1f : 0f;
+            features[7] = cyclic.HourSin;
+            features[8] = cyclic.HourCos;
+            features[9] = cyclic.WeekdaySin;
+            features[10] = cyclic.WeekdayCos;
+            features[11] = (float)targetLag192;
+            features[12] = (float)targetLag672;
+            features[13] = (float)targetLag192Rolling16.Mean;
+            features[14] = (float)targetLag192Rolling16.Std;
+            features[15] = (float)targetLag192Rolling96.Mean;
+            features[16] = (float)targetLag192Rolling96.Std;
+            features[17] = (float)targetLag672Rolling16.Mean;
+            features[18] = (float)targetLag672Rolling16.Std;
+            features[19] = (float)targetLag672Rolling96.Mean;
+            features[20] = (float)targetLag672Rolling96.Std;
 
-            var score = model.PredictionEngine.Predict(new OneStepTrainingRow { Features = features }).Score;
+            var score = model.PredictionEngine.Predict(reusableRow).Score;
             var predicted = double.IsFinite(score) ? score : targetAtT;
             predictions[step - 1] = predicted;
 
@@ -732,23 +803,6 @@ public static class Part3Modeling
         }
 
         return (predictions, fallbackSteps);
-    }
-
-    private static RollingWindowStats InitializeRollingWindow(
-        RecursiveHistoryState history,
-        DateTime endTimestamp,
-        int windowSteps,
-        double fallback)
-    {
-        var window = new RollingWindowStats(windowSteps);
-        for (var offset = windowSteps - 1; offset >= 0; offset--)
-        {
-            var timestamp = endTimestamp.AddMinutes(-offset * PipelineConstants.MinutesPerStep);
-            var value = history.GetValueAtOrBefore(timestamp, fallback);
-            window.AddInitial(value);
-        }
-
-        return window;
     }
 
     private static int UpperBound(DateTime[] values, int length, DateTime target)

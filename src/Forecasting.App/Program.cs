@@ -1,9 +1,12 @@
 ﻿using Forecasting.App;
 
-if (args.Length == 0 || (args.Length > 0 && string.Equals(args[0], "all", StringComparison.OrdinalIgnoreCase)))
+var enablePfi = args.Any(a => string.Equals(a, "--pfi", StringComparison.OrdinalIgnoreCase));
+var positionalArgs = args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray();
+
+if (positionalArgs.Length == 0 || (positionalArgs.Length > 0 && string.Equals(positionalArgs[0], "all", StringComparison.OrdinalIgnoreCase)))
 {
-	var allValidationWindowDays = args.Length > 1
-		? ParseValidationWindowDays(args[1])
+	var allValidationWindowDays = positionalArgs.Length > 1
+		? ParseValidationWindowDays(positionalArgs[1])
 		: PipelineConstants.DefaultValidationWindowDays;
 
 	var dataPath = Path.Combine("data", "testdata.csv");
@@ -44,7 +47,7 @@ if (args.Length == 0 || (args.Length > 0 && string.Equals(args[0], "all", String
 	Console.WriteLine($"Part 2 complete: {part2Dataset.Summary.OutputRows} rows -> {part2OutputPath} (validation window: {allValidationWindowDays} days)");
 
 	var part3Rows = Part3Modeling.ReadPart2DatasetCsv(part2OutputPath);
-	var part3Result = Part3Modeling.RunModels(part3Rows);
+	var part3Result = Part3Modeling.RunModels(part3Rows, enablePfi: enablePfi);
 	Part3Modeling.WriteForecastsCsv(part3Result.Forecasts, part3OutputPath);
 	Part3Modeling.WriteSummaryJson(part3Result.Summary, part3SummaryPath);
 	if (part3Result.FeatureImportance is not null)
@@ -65,12 +68,12 @@ if (args.Length == 0 || (args.Length > 0 && string.Equals(args[0], "all", String
 	return;
 }
 
-if (args.Length > 0 && string.Equals(args[0], "diagnostics", StringComparison.OrdinalIgnoreCase))
+if (positionalArgs.Length > 0 && string.Equals(positionalArgs[0], "diagnostics", StringComparison.OrdinalIgnoreCase))
 {
-	var diagnosticsInputPath = args.Length > 1 ? args[1] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
-	var diagnosticsPredictionsPath = args.Length > 2 ? args[2] : Path.Combine("artifacts", "part3_predictions.csv");
-	var diagnosticsOutputDirectory = args.Length > 3 ? args[3] : Path.Combine("artifacts", "diagnostics");
-	var diagnosticsPfiPath = args.Length > 4 ? args[4] : Path.Combine("artifacts", "part3_feature_importance.csv");
+	var diagnosticsInputPath = positionalArgs.Length > 1 ? positionalArgs[1] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
+	var diagnosticsPredictionsPath = positionalArgs.Length > 2 ? positionalArgs[2] : Path.Combine("artifacts", "part3_predictions.csv");
+	var diagnosticsOutputDirectory = positionalArgs.Length > 3 ? positionalArgs[3] : Path.Combine("artifacts", "diagnostics");
+	var diagnosticsPfiPath = positionalArgs.Length > 4 ? positionalArgs[4] : Path.Combine("artifacts", "part3_feature_importance.csv");
 
 	if (!File.Exists(diagnosticsInputPath))
 	{
@@ -102,12 +105,12 @@ if (args.Length > 0 && string.Equals(args[0], "diagnostics", StringComparison.Or
 	return;
 }
 
-if (args.Length > 0 && string.Equals(args[0], "part4", StringComparison.OrdinalIgnoreCase))
+if (positionalArgs.Length > 0 && string.Equals(positionalArgs[0], "part4", StringComparison.OrdinalIgnoreCase))
 {
-	var part4InputPath = args.Length > 1 ? args[1] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
-	var part4PredictionsPath = args.Length > 2 ? args[2] : Path.Combine("artifacts", "part3_predictions.csv");
-	var part4MetricsOutputPath = args.Length > 3 ? args[3] : Path.Combine("artifacts", "part4_metrics.csv");
-	var part4SampleOutputPath = args.Length > 4 ? args[4] : Path.Combine("artifacts", "part4_pred_vs_actual_sample.csv");
+	var part4InputPath = positionalArgs.Length > 1 ? positionalArgs[1] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
+	var part4PredictionsPath = positionalArgs.Length > 2 ? positionalArgs[2] : Path.Combine("artifacts", "part3_predictions.csv");
+	var part4MetricsOutputPath = positionalArgs.Length > 3 ? positionalArgs[3] : Path.Combine("artifacts", "part4_metrics.csv");
+	var part4SampleOutputPath = positionalArgs.Length > 4 ? positionalArgs[4] : Path.Combine("artifacts", "part4_pred_vs_actual_sample.csv");
 
 	if (!File.Exists(part4InputPath))
 	{
@@ -139,12 +142,12 @@ if (args.Length > 0 && string.Equals(args[0], "part4", StringComparison.OrdinalI
 	return;
 }
 
-if (args.Length > 0 && string.Equals(args[0], "part3", StringComparison.OrdinalIgnoreCase))
+if (positionalArgs.Length > 0 && string.Equals(positionalArgs[0], "part3", StringComparison.OrdinalIgnoreCase))
 {
-	var part3InputPath = args.Length > 1 ? args[1] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
-	var part3OutputPath = args.Length > 2 ? args[2] : Path.Combine("artifacts", "part3_predictions.csv");
-	var part3SummaryPath = args.Length > 3
-		? args[3]
+	var part3InputPath = positionalArgs.Length > 1 ? positionalArgs[1] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
+	var part3OutputPath = positionalArgs.Length > 2 ? positionalArgs[2] : Path.Combine("artifacts", "part3_predictions.csv");
+	var part3SummaryPath = positionalArgs.Length > 3
+		? positionalArgs[3]
 		: Path.Combine(
 			Path.GetDirectoryName(part3OutputPath) ?? "artifacts",
 			$"{Path.GetFileNameWithoutExtension(part3OutputPath)}.summary.json");
@@ -157,7 +160,7 @@ if (args.Length > 0 && string.Equals(args[0], "part3", StringComparison.OrdinalI
 	}
 
 	var part3Rows = Part3Modeling.ReadPart2DatasetCsv(part3InputPath);
-	var part3Result = Part3Modeling.RunModels(part3Rows);
+	var part3Result = Part3Modeling.RunModels(part3Rows, enablePfi: enablePfi);
 	Part3Modeling.WriteForecastsCsv(part3Result.Forecasts, part3OutputPath);
 	Part3Modeling.WriteSummaryJson(part3Result.Summary, part3SummaryPath);
 	if (part3Result.FeatureImportance is not null)
@@ -176,17 +179,17 @@ if (args.Length > 0 && string.Equals(args[0], "part3", StringComparison.OrdinalI
 	return;
 }
 
-if (args.Length > 0 && string.Equals(args[0], "part2", StringComparison.OrdinalIgnoreCase))
+if (positionalArgs.Length > 0 && string.Equals(positionalArgs[0], "part2", StringComparison.OrdinalIgnoreCase))
 {
-	var part2InputPath = args.Length > 1 ? args[1] : Path.Combine("artifacts", "part1_feature_matrix.csv");
-	var part2OutputPath = args.Length > 2 ? args[2] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
-	var part2SummaryPath = args.Length > 3
-		? args[3]
+	var part2InputPath = positionalArgs.Length > 1 ? positionalArgs[1] : Path.Combine("artifacts", "part1_feature_matrix.csv");
+	var part2OutputPath = positionalArgs.Length > 2 ? positionalArgs[2] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
+	var part2SummaryPath = positionalArgs.Length > 3
+		? positionalArgs[3]
 		: Path.Combine(
 			Path.GetDirectoryName(part2OutputPath) ?? "artifacts",
 			$"{Path.GetFileNameWithoutExtension(part2OutputPath)}.summary.json");
-	var part2ValidationWindowDays = args.Length > 4
-		? ParseValidationWindowDays(args[4])
+	var part2ValidationWindowDays = positionalArgs.Length > 4
+		? ParseValidationWindowDays(positionalArgs[4])
 		: PipelineConstants.DefaultValidationWindowDays;
 
 	if (!File.Exists(part2InputPath))
@@ -210,23 +213,23 @@ if (args.Length > 0 && string.Equals(args[0], "part2", StringComparison.OrdinalI
 	return;
 }
 
-if (args.Length > 0 && string.Equals(args[0], "part1", StringComparison.OrdinalIgnoreCase))
+if (positionalArgs.Length > 0 && string.Equals(positionalArgs[0], "part1", StringComparison.OrdinalIgnoreCase))
 {
-	var dataPath = args.Length > 1 ? args[1] : Path.Combine("data", "testdata.csv");
-	var holidaysPath = args.Length > 2 ? args[2] : Path.Combine("data", "holidays.public.csv");
-	var outputPath = args.Length > 3 ? args[3] : Path.Combine("artifacts", "part1_feature_matrix.csv");
-	var auditOutputPath = args.Length > 4
-		? args[4]
+	var dataPath = positionalArgs.Length > 1 ? positionalArgs[1] : Path.Combine("data", "testdata.csv");
+	var holidaysPath = positionalArgs.Length > 2 ? positionalArgs[2] : Path.Combine("data", "holidays.public.csv");
+	var outputPath = positionalArgs.Length > 3 ? positionalArgs[3] : Path.Combine("artifacts", "part1_feature_matrix.csv");
+	var auditOutputPath = positionalArgs.Length > 4
+		? positionalArgs[4]
 		: Path.Combine(
 			Path.GetDirectoryName(outputPath) ?? "artifacts",
 			$"{Path.GetFileNameWithoutExtension(outputPath)}.audit.csv");
-	var auditSummaryOutputPath = args.Length > 5
-		? args[5]
+	var auditSummaryOutputPath = positionalArgs.Length > 5
+		? positionalArgs[5]
 		: Path.Combine(
 			Path.GetDirectoryName(outputPath) ?? "artifacts",
 			$"{Path.GetFileNameWithoutExtension(outputPath)}.audit.summary.json");
-	var validationWindowDays = args.Length > 6
-		? ParseValidationWindowDays(args[6])
+	var validationWindowDays = positionalArgs.Length > 6
+		? ParseValidationWindowDays(positionalArgs[6])
 		: PipelineConstants.DefaultValidationWindowDays;
 
 	if (!File.Exists(dataPath) || !File.Exists(holidaysPath))

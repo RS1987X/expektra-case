@@ -235,11 +235,21 @@ public class Part3ModelingTests
     }
 
     [Fact]
+    public void RunModels_PfiIsNullByDefault()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 4);
+
+        var result = Part3Modeling.RunModels(rows);
+
+        Assert.Null(result.FeatureImportance);
+    }
+
+    [Fact]
     public void Pfi_ResultHas21FeaturesWithFiniteMetrics()
     {
         var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 6);
 
-        var result = Part3Modeling.RunModels(rows);
+        var result = Part3Modeling.RunModels(rows, enablePfi: true);
 
         Assert.NotNull(result.FeatureImportance);
         Assert.Equal(21, result.FeatureImportance.Features.Count);
@@ -263,7 +273,7 @@ public class Part3ModelingTests
     {
         var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 6);
 
-        var result = Part3Modeling.RunModels(rows);
+        var result = Part3Modeling.RunModels(rows, enablePfi: true);
 
         Assert.NotNull(result.FeatureImportance);
         var features = result.FeatureImportance.Features;
@@ -286,8 +296,8 @@ public class Part3ModelingTests
     {
         var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 4);
 
-        var result1 = Part3Modeling.RunModels(rows);
-        var result2 = Part3Modeling.RunModels(rows);
+        var result1 = Part3Modeling.RunModels(rows, enablePfi: true);
+        var result2 = Part3Modeling.RunModels(rows, enablePfi: true);
 
         Assert.NotNull(result1.FeatureImportance);
         Assert.NotNull(result2.FeatureImportance);
@@ -328,7 +338,7 @@ public class Part3ModelingTests
     public void Pfi_WriteFeatureImportanceCsv_WritesExpectedFormat()
     {
         var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 4);
-        var result = Part3Modeling.RunModels(rows);
+        var result = Part3Modeling.RunModels(rows, enablePfi: true);
 
         Assert.NotNull(result.FeatureImportance);
 
