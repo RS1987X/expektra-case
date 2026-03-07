@@ -373,7 +373,12 @@ public static class PipelineRunner
         ICollection<string>? lines,
         Action<string>? output)
     {
-        if (!maxPart3Rows.HasValue || rows.Count <= maxPart3Rows.Value)
+        if (!maxPart3Rows.HasValue)
+        {
+            return rows as List<Part3InputRow> ?? rows.ToList();
+        }
+
+        if (rows.Count <= maxPart3Rows.Value)
         {
             return rows.OrderBy(row => row.AnchorUtcTime).ToList();
         }
