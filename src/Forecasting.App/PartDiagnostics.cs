@@ -68,6 +68,7 @@ public sealed record DiagnosticsTargetPoint(
 public sealed record DiagnosticsOverlayPoint(
     string Split,
     string ModelName,
+    int HorizonStep,
     DateTime ForecastUtcTime,
     double Predicted,
     double Actual);
@@ -88,7 +89,8 @@ public static class PartDiagnostics
     private const int MinutesPerStep = 15;
     private const int HorizonBucketSize = 24;
     private const int SampleAnchors = 2;
-    private const int OverlayHorizonStep = 1;
+    private static readonly int[] OverlayHorizonSteps = [96, 192];
+    private const int OverlayMaxRenderPoints = 1500;
     private const string OverlayModelName = "FastTreeRecursive";
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
 
@@ -173,18 +175,20 @@ public static class PartDiagnostics
     {
         Directory.CreateDirectory(outputDirectory);
 
-        var bySplit = result.OverlayPoints
-            .GroupBy(point => point.Split, StringComparer.Ordinal)
-            .OrderBy(group => group.Key, StringComparer.Ordinal);
+        var bySplitAndHorizon = result.OverlayPoints
+            .GroupBy(point => (point.Split, point.HorizonStep))
+            .OrderBy(group => group.Key.Split, StringComparer.Ordinal)
+            .ThenBy(group => group.Key.HorizonStep);
 
-        foreach (var splitGroup in bySplit)
+        foreach (var group in bySplitAndHorizon)
         {
-            var safeSplit = SanitizeFileNameSegment(splitGroup.Key);
-            var outputPath = Path.Combine(outputDirectory, $"target_vs_predicted_{safeSplit}.svg");
-            File.WriteAllText(outputPath, BuildSplitOverlaySvg(splitGroup.ToList()));
+            var safeSplit = SanitizeFileNameSegment(group.Key.Split);
+            var suffix = $"tplus{group.Key.HorizonStep}";
+            var outputPath = Path.Combine(outputDirectory, $"target_vs_predicted_{safeSplit}_{suffix}.svg");
+            File.WriteAllText(outputPath, BuildSplitOverlaySvg(group.ToList()));
 
-            var csvPath = Path.Combine(outputDirectory, $"target_vs_predicted_{safeSplit}.csv");
-            WriteSplitOverlayCsv(splitGroup.ToList(), csvPath);
+            var csvPath = Path.Combine(outputDirectory, $"target_vs_predicted_{safeSplit}_{suffix}.csv");
+            WriteSplitOverlayCsv(group.ToList(), csvPath);
         }
     }
 
@@ -192,7 +196,7 @@ public static class PartDiagnostics
     {
         EnsureOutputDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
-        writer.WriteLine("Split;ModelName;ForecastUtcTime;Actual;Predicted;Residual");
+        writer.WriteLine("Split;ModelName;HorizonStep;ForecastUtcTime;Actual;Predicted;Residual");
 
         foreach (var point in points.OrderBy(point => point.ForecastUtcTime))
         {
@@ -200,6 +204,7 @@ public static class PartDiagnostics
             writer.WriteLine(string.Join(';',
                 point.Split,
                 point.ModelName,
+                point.HorizonStep.ToString(InvariantCulture),
                 point.ForecastUtcTime.ToString("yyyy-MM-dd HH:mm:ss", InvariantCulture),
                 point.Actual.ToString("F6", InvariantCulture),
                 point.Predicted.ToString("F6", InvariantCulture),
@@ -581,11 +586,11 @@ public static class PartDiagnostics
         var overlays = new List<DiagnosticsOverlayPoint>();
 
         foreach (var point in predictions.Where(point =>
-                     point.HorizonStep == OverlayHorizonStep
+                     OverlayHorizonSteps.Contains(point.HorizonStep)
                      && string.Equals(point.ModelName, OverlayModelName, StringComparison.Ordinal)))
         {
             var split = NormalizeSplit(point.Split);
-            if (!actualLookup.TryGetValue((split, point.AnchorUtcTime, OverlayHorizonStep), out var actual))
+            if (!actualLookup.TryGetValue((split, point.AnchorUtcTime, point.HorizonStep), out var actual))
             {
                 continue;
             }
@@ -593,7 +598,8 @@ public static class PartDiagnostics
             overlays.Add(new DiagnosticsOverlayPoint(
                 split,
                 point.ModelName,
-                point.AnchorUtcTime.AddMinutes(OverlayHorizonStep * MinutesPerStep),
+                point.HorizonStep,
+                point.AnchorUtcTime.AddMinutes(point.HorizonStep * MinutesPerStep),
                 point.Predicted,
                 actual));
         }
@@ -933,23 +939,24 @@ public static class PartDiagnostics
 
     private static void AppendSplitOverlayPlots(StringBuilder sb, IReadOnlyList<DiagnosticsOverlayPoint> overlayPoints)
     {
-        sb.AppendLine($"<h2>Target vs {Escape(OverlayModelName)} over time by split (t+{OverlayHorizonStep})</h2>");
+        sb.AppendLine($"<h2>Target vs {Escape(OverlayModelName)} over time by split ({string.Join(", ", OverlayHorizonSteps.Select(step => $"t+{step}"))})</h2>");
 
-        var bySplit = overlayPoints
-            .GroupBy(point => point.Split, StringComparer.Ordinal)
-            .OrderBy(group => group.Key, StringComparer.Ordinal)
+        var bySplitAndHorizon = overlayPoints
+            .GroupBy(point => (point.Split, point.HorizonStep))
+            .OrderBy(group => group.Key.Split, StringComparer.Ordinal)
+            .ThenBy(group => group.Key.HorizonStep)
             .ToList();
 
-        if (bySplit.Count == 0)
+        if (bySplitAndHorizon.Count == 0)
         {
             sb.AppendLine("<p>No overlay points available.</p>");
             return;
         }
 
-        foreach (var splitGroup in bySplit)
+        foreach (var group in bySplitAndHorizon)
         {
-            sb.AppendLine($"<h3>Split: {Escape(splitGroup.Key)}</h3>");
-            sb.AppendLine(BuildSplitOverlaySvg(splitGroup.ToList()));
+            sb.AppendLine($"<h3>Split: {Escape(group.Key.Split)} | Horizon: t+{group.Key.HorizonStep}</h3>");
+            sb.AppendLine(BuildSplitOverlaySvg(group.ToList()));
         }
     }
 
@@ -1056,12 +1063,19 @@ public static class PartDiagnostics
         const double yMax = 220d;
         static string F2(double value) => value.ToString("F2", InvariantCulture);
 
+        var horizonStep = splitPoints[0].HorizonStep;
+
         var actualSeries = splitPoints
             .GroupBy(point => point.ForecastUtcTime)
             .Select(group => group.First())
             .OrderBy(point => point.ForecastUtcTime)
             .Select(point => (point.ForecastUtcTime, point.Actual))
             .ToList();
+
+        if (actualSeries.Count > OverlayMaxRenderPoints)
+        {
+            actualSeries = DownsampleSeries(actualSeries, OverlayMaxRenderPoints);
+        }
 
         if (actualSeries.Count == 0)
         {
@@ -1130,7 +1144,7 @@ public static class PartDiagnostics
             svg.AppendLine($"<text x=\"{F2(x)}\" y=\"{F2(yMax + 18d)}\" text-anchor=\"middle\" font-size=\"10\" fill=\"#666\">{label}</text>");
         }
 
-        svg.AppendLine("<text x=\"495\" y=\"252\" text-anchor=\"middle\" font-size=\"11\" fill=\"#444\">Forecast time (UTC)</text>");
+        svg.AppendLine($"<text x=\"495\" y=\"252\" text-anchor=\"middle\" font-size=\"11\" fill=\"#444\">Forecast time (UTC) | Horizon t+{horizonStep}</text>");
         svg.AppendLine("<text x=\"18\" y=\"120\" transform=\"rotate(-90,18,120)\" text-anchor=\"middle\" font-size=\"11\" fill=\"#444\">Target / prediction</text>");
 
         var actualPolyline = BuildIndexedPolyline(
@@ -1163,6 +1177,25 @@ public static class PartDiagnostics
 
         svg.AppendLine("</svg>");
         return svg.ToString();
+    }
+
+    private static List<(DateTime ForecastUtcTime, double Value)> DownsampleSeries(
+        IReadOnlyList<(DateTime ForecastUtcTime, double Value)> points,
+        int maxPoints)
+    {
+        if (points.Count <= maxPoints)
+        {
+            return points.ToList();
+        }
+
+        var sampled = new List<(DateTime ForecastUtcTime, double Value)>(maxPoints);
+        for (var index = 0; index < maxPoints; index++)
+        {
+            var sourceIndex = (int)Math.Round(index * (points.Count - 1d) / (maxPoints - 1d));
+            sampled.Add(points[sourceIndex]);
+        }
+
+        return sampled;
     }
 
     private static string BuildPolyline(IReadOnlyList<(int XStep, double YValue)> points, double minY, double maxY)

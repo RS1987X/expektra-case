@@ -140,18 +140,20 @@ public class PartDiagnosticsTests
                 .GetFiles(outputDir, "target_vs_predicted_*.svg")
                 .Select(Path.GetFileName)
                 .ToList();
-            Assert.Contains("target_vs_predicted_validation.svg", overlayFiles);
+            Assert.Contains("target_vs_predicted_validation_tplus96.svg", overlayFiles);
+            Assert.Contains("target_vs_predicted_validation_tplus192.svg", overlayFiles);
 
             var overlayCsvFiles = Directory
                 .GetFiles(outputDir, "target_vs_predicted_*.csv")
                 .Select(Path.GetFileName)
                 .ToList();
-            Assert.Contains("target_vs_predicted_validation.csv", overlayCsvFiles);
+            Assert.Contains("target_vs_predicted_validation_tplus96.csv", overlayCsvFiles);
+            Assert.Contains("target_vs_predicted_validation_tplus192.csv", overlayCsvFiles);
 
             var html = File.ReadAllText(Path.Combine(outputDir, "diagnostics_report.html"));
             Assert.Contains("<svg", html);
             Assert.Contains("Target over time (TargetAtT)", html);
-            Assert.Contains("Target vs FastTreeRecursive over time by split (t+1)", html);
+            Assert.Contains("Target vs FastTreeRecursive over time by split (t+96, t+192)", html);
             Assert.Contains("Time (UTC)", html);
             Assert.Contains("Target value", html);
             Assert.Contains("Predicted vs actual sampled anchors", html);
