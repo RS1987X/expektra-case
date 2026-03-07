@@ -71,7 +71,8 @@ public sealed record Part3PfiFeatureResult(
 public sealed record Part3PfiResult(
     IReadOnlyList<Part3PfiFeatureResult> Features,
     int PermutationCount,
-    int EvaluationRowCount);
+    int EvaluationRowCount,
+    int HorizonStep);
 
 public static class Part3Modeling
 {
@@ -392,8 +393,18 @@ public static class Part3Modeling
         return rows;
     }
 
-    public static Part3RunResult RunModels(IReadOnlyList<Part3InputRow> rows, FastTreeOptions? fastTreeOptions = null, bool enablePfi = false)
+    public static Part3RunResult RunModels(
+        IReadOnlyList<Part3InputRow> rows,
+        FastTreeOptions? fastTreeOptions = null,
+        bool enablePfi = false,
+        int pfiHorizonStep = 1)
     {
+        if (pfiHorizonStep < 1 || pfiHorizonStep > PipelineConstants.HorizonSteps)
+        {
+            throw new ArgumentOutOfRangeException(nameof(pfiHorizonStep),
+                $"PFI horizon step must be between 1 and {PipelineConstants.HorizonSteps}.");
+        }
+
         var sorted = rows.OrderBy(row => row.AnchorUtcTime).ToList();
         var trainRows = sorted.Where(row => string.Equals(row.Split, "Train", StringComparison.OrdinalIgnoreCase)).ToList();
         var validationRows = sorted.Where(row => string.Equals(row.Split, "Validation", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -412,7 +423,7 @@ public static class Part3Modeling
         var fastTreeModel = BuildFastTreeRecursiveModel(trainRows, sorted, fastTreeOptions ?? new FastTreeOptions());
 
         // Compute PFI on validation data only when explicitly requested (it is expensive).
-        var pfiResult = enablePfi ? ComputePermutationImportance(fastTreeModel, validationRows) : null;
+        var pfiResult = enablePfi ? ComputePermutationImportance(fastTreeModel, validationRows, pfiHorizonStep) : null;
 
         var forecastAnchors = sorted
             .Where(row => string.Equals(row.Split, "Train", StringComparison.OrdinalIgnoreCase)
@@ -534,7 +545,8 @@ public static class Part3Modeling
 
     private static Part3PfiResult? ComputePermutationImportance(
         FastTreeRecursiveModel model,
-        IReadOnlyList<Part3InputRow> validationRows)
+        IReadOnlyList<Part3InputRow> validationRows,
+        int pfiHorizonStep)
     {
         if (validationRows.Count == 0)
         {
@@ -545,7 +557,7 @@ public static class Part3Modeling
             .Select(row => new OneStepModelInput
             {
                 Features = ToFeatureVector(row),
-                Label = (float)row.HorizonTargets[0]
+                Label = (float)row.HorizonTargets[pfiHorizonStep - 1]
             })
             .ToList();
 
@@ -583,7 +595,7 @@ public static class Part3Modeling
                 f.R2DeltaStdDev))
             .ToList();
 
-        return new Part3PfiResult(features, PfiPermutationCount, validationRows.Count);
+        return new Part3PfiResult(features, PfiPermutationCount, validationRows.Count, pfiHorizonStep);
     }
 
     private static SeasonalBaselineModel BuildSeasonalBaseline(IReadOnlyList<Part3InputRow> trainRows)

@@ -1,7 +1,9 @@
 ﻿using Forecasting.App;
 
-var enablePfi = args.Any(a => string.Equals(a, "--pfi", StringComparison.OrdinalIgnoreCase));
-var positionalArgs = args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray();
+var pfiHorizonStep = ParseOptionalPfiHorizonStep(args);
+var enablePfi = args.Any(a => string.Equals(a, "--pfi", StringComparison.OrdinalIgnoreCase)) || pfiHorizonStep.HasValue;
+var effectivePfiHorizonStep = pfiHorizonStep ?? 1;
+var positionalArgs = ExtractPositionalArgs(args);
 
 if (positionalArgs.Length == 0 || (positionalArgs.Length > 0 && string.Equals(positionalArgs[0], "all", StringComparison.OrdinalIgnoreCase)))
 {
@@ -47,13 +49,13 @@ if (positionalArgs.Length == 0 || (positionalArgs.Length > 0 && string.Equals(po
 	Console.WriteLine($"Part 2 complete: {part2Dataset.Summary.OutputRows} rows -> {part2OutputPath} (validation window: {allValidationWindowDays} days)");
 
 	var part3Rows = Part3Modeling.ReadPart2DatasetCsv(part2OutputPath);
-	var part3Result = Part3Modeling.RunModels(part3Rows, enablePfi: enablePfi);
+	var part3Result = Part3Modeling.RunModels(part3Rows, enablePfi: enablePfi, pfiHorizonStep: effectivePfiHorizonStep);
 	Part3Modeling.WriteForecastsCsv(part3Result.Forecasts, part3OutputPath);
 	Part3Modeling.WriteSummaryJson(part3Result.Summary, part3SummaryPath);
 	if (part3Result.FeatureImportance is not null)
 	{
 		Part3Modeling.WriteFeatureImportanceCsv(part3Result.FeatureImportance, part3PfiOutputPath);
-		Console.WriteLine($"Part 3 PFI complete: {part3Result.FeatureImportance.Features.Count} features -> {part3PfiOutputPath}");
+		Console.WriteLine($"Part 3 PFI complete: {part3Result.FeatureImportance.Features.Count} features for horizon t+{part3Result.FeatureImportance.HorizonStep} -> {part3PfiOutputPath}");
 	}
 	Console.WriteLine($"Part 3 complete: {part3Result.Forecasts.Count} forecasts -> {part3OutputPath}");
 
@@ -160,7 +162,7 @@ if (positionalArgs.Length > 0 && string.Equals(positionalArgs[0], "part3", Strin
 	}
 
 	var part3Rows = Part3Modeling.ReadPart2DatasetCsv(part3InputPath);
-	var part3Result = Part3Modeling.RunModels(part3Rows, enablePfi: enablePfi);
+	var part3Result = Part3Modeling.RunModels(part3Rows, enablePfi: enablePfi, pfiHorizonStep: effectivePfiHorizonStep);
 	Part3Modeling.WriteForecastsCsv(part3Result.Forecasts, part3OutputPath);
 	Part3Modeling.WriteSummaryJson(part3Result.Summary, part3SummaryPath);
 	if (part3Result.FeatureImportance is not null)
@@ -169,7 +171,7 @@ if (positionalArgs.Length > 0 && string.Equals(positionalArgs[0], "part3", Strin
 			Path.GetDirectoryName(part3OutputPath) ?? "artifacts",
 			"part3_feature_importance.csv");
 		Part3Modeling.WriteFeatureImportanceCsv(part3Result.FeatureImportance, part3PfiPath);
-		Console.WriteLine($"Saved Part 3 PFI to: {part3PfiPath}");
+		Console.WriteLine($"Saved Part 3 PFI (horizon t+{part3Result.FeatureImportance.HorizonStep}) to: {part3PfiPath}");
 	}
 
 	Console.WriteLine($"Part 3 models: {string.Join(", ", part3Result.Summary.Models.Select(model => model.ModelName))}");
@@ -259,6 +261,84 @@ static int ParseValidationWindowDays(string value)
 	if (!int.TryParse(value, out var parsed) || parsed <= 0)
 	{
 		throw new ArgumentException($"Invalid validation window days value '{value}'. Expected a positive integer.");
+	}
+
+	return parsed;
+}
+
+static string[] ExtractPositionalArgs(string[] args)
+{
+	var optionsWithValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+	{
+		"--pfi-horizon"
+	};
+
+	var positional = new List<string>();
+	for (var index = 0; index < args.Length; index++)
+	{
+		var token = args[index];
+		if (!token.StartsWith("--", StringComparison.Ordinal))
+		{
+			positional.Add(token);
+			continue;
+		}
+
+		var equalsIndex = token.IndexOf('=');
+		var optionName = equalsIndex >= 0 ? token[..equalsIndex] : token;
+		if (optionsWithValues.Contains(optionName) && equalsIndex < 0 && index + 1 < args.Length)
+		{
+			index++;
+		}
+	}
+
+	return positional.ToArray();
+}
+
+static int? ParseOptionalPfiHorizonStep(string[] args)
+{
+	const string flag = "--pfi-horizon";
+	int? parsedValue = null;
+
+	for (var index = 0; index < args.Length; index++)
+	{
+		var token = args[index];
+		if (token.StartsWith(flag + "=", StringComparison.OrdinalIgnoreCase))
+		{
+			if (parsedValue.HasValue)
+			{
+				throw new ArgumentException($"Duplicate '{flag}' option.");
+			}
+
+			parsedValue = ParsePfiHorizonValue(token[(flag.Length + 1)..]);
+			continue;
+		}
+
+		if (!string.Equals(token, flag, StringComparison.OrdinalIgnoreCase))
+		{
+			continue;
+		}
+
+		if (parsedValue.HasValue)
+		{
+			throw new ArgumentException($"Duplicate '{flag}' option.");
+		}
+
+		if (index + 1 >= args.Length)
+		{
+			throw new ArgumentException($"Missing value for '{flag}'. Expected an integer from 1 to {PipelineConstants.HorizonSteps}.");
+		}
+
+		parsedValue = ParsePfiHorizonValue(args[++index]);
+	}
+
+	return parsedValue;
+}
+
+static int ParsePfiHorizonValue(string value)
+{
+	if (!int.TryParse(value, out var parsed) || parsed < 1 || parsed > PipelineConstants.HorizonSteps)
+	{
+		throw new ArgumentException($"Invalid --pfi-horizon value '{value}'. Expected an integer from 1 to {PipelineConstants.HorizonSteps}.");
 	}
 
 	return parsed;

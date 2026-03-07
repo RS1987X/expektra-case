@@ -255,6 +255,7 @@ public class Part3ModelingTests
         Assert.Equal(17, result.FeatureImportance.Features.Count);
         Assert.Equal(10, result.FeatureImportance.PermutationCount);
         Assert.Equal(6, result.FeatureImportance.EvaluationRowCount);
+        Assert.Equal(1, result.FeatureImportance.HorizonStep);
 
         Assert.All(result.FeatureImportance.Features, feature =>
         {
@@ -289,6 +290,29 @@ public class Part3ModelingTests
                 Math.Abs(features[i - 1].MaeDelta) >= Math.Abs(features[i].MaeDelta),
                 $"Feature at rank {features[i - 1].Rank} (|MAE|={Math.Abs(features[i - 1].MaeDelta)}) should have >= |MAE| than rank {features[i].Rank} (|MAE|={Math.Abs(features[i].MaeDelta)})");
         }
+    }
+
+    [Fact]
+    public void Pfi_UsesRequestedHorizonStep()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 6);
+
+        var result = Part3Modeling.RunModels(rows, enablePfi: true, pfiHorizonStep: 96);
+
+        Assert.NotNull(result.FeatureImportance);
+        Assert.Equal(96, result.FeatureImportance.HorizonStep);
+        Assert.Equal(17, result.FeatureImportance.Features.Count);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(193)]
+    public void RunModels_InvalidPfiHorizon_ThrowsArgumentOutOfRangeException(int pfiHorizonStep)
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 4);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Part3Modeling.RunModels(rows, enablePfi: true, pfiHorizonStep: pfiHorizonStep));
     }
 
     [Fact]
