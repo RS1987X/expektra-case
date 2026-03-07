@@ -47,6 +47,8 @@ dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- all --max-row
 
 Flaggan `--max-rows` kan användas med både `all` och `part3` för snabbare verifieringskörningar.
 
+For utvecklare: guide for att lägga till en ny Part 3-modell finns i `docs/ARCHITECTURE.md` under section `Adding a Part 3 Model`.
+
 Genererade filer skrivs till `artifacts/`.
 Vid `all`- och `part3`-körningar skrivs även `run_manifest.json` med effektiva körinställningar (CLI-args, PFI-horisont, model defaults, paths och git metadata) for reproducerbarhet.
 
