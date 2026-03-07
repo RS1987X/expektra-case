@@ -4,7 +4,7 @@ if (args.Length == 0 || (args.Length > 0 && string.Equals(args[0], "all", String
 {
 	var allValidationWindowDays = args.Length > 1
 		? ParseValidationWindowDays(args[1])
-		: Part1Preprocessing.DefaultValidationWindowDays;
+		: PipelineConstants.DefaultValidationWindowDays;
 
 	var dataPath = Path.Combine("data", "testdata.csv");
 	var holidaysPath = Path.Combine("data", "holidays.public.csv");
@@ -172,7 +172,7 @@ if (args.Length > 0 && string.Equals(args[0], "part2", StringComparison.OrdinalI
 			$"{Path.GetFileNameWithoutExtension(part2OutputPath)}.summary.json");
 	var part2ValidationWindowDays = args.Length > 4
 		? ParseValidationWindowDays(args[4])
-		: Part1Preprocessing.DefaultValidationWindowDays;
+		: PipelineConstants.DefaultValidationWindowDays;
 
 	if (!File.Exists(part2InputPath))
 	{
@@ -212,7 +212,7 @@ if (args.Length > 0 && string.Equals(args[0], "part1", StringComparison.OrdinalI
 			$"{Path.GetFileNameWithoutExtension(outputPath)}.audit.summary.json");
 	var validationWindowDays = args.Length > 6
 		? ParseValidationWindowDays(args[6])
-		: Part1Preprocessing.DefaultValidationWindowDays;
+		: PipelineConstants.DefaultValidationWindowDays;
 
 	if (!File.Exists(dataPath) || !File.Exists(holidaysPath))
 	{

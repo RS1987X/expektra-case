@@ -55,8 +55,6 @@ public sealed record Part3RunResult(
 
 public static class Part3Modeling
 {
-    private const int HorizonSteps = 192;
-    private const int MinutesPerStep = 15;
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
 
     private sealed record SeasonalKey(int DayOfWeek, int HourOfDay, int MinuteOfHour);
@@ -133,8 +131,8 @@ public static class Part3Modeling
         private readonly DateTime[] _baseTimestamps;
         private readonly double[] _baseValues;
         private readonly int _baseLength;
-        private readonly List<DateTime> _predictedTimestamps = new(HorizonSteps);
-        private readonly List<double> _predictedValues = new(HorizonSteps);
+        private readonly List<DateTime> _predictedTimestamps = new(PipelineConstants.HorizonSteps);
+        private readonly List<double> _predictedValues = new(PipelineConstants.HorizonSteps);
 
         public RecursiveHistoryState(DateTime[] baseTimestamps, double[] baseValues, int baseEndIndex)
         {
@@ -184,9 +182,9 @@ public static class Part3Modeling
             }
 
             var parts = line.Split(';');
-            if (parts.Length < 20 + HorizonSteps)
+            if (parts.Length < 20 + PipelineConstants.HorizonSteps)
             {
-                throw new FormatException($"Invalid row at line {lineNumber}: expected at least {20 + HorizonSteps} columns.");
+                throw new FormatException($"Invalid row at line {lineNumber}: expected at least {20 + PipelineConstants.HorizonSteps} columns.");
             }
 
             if (!DateTime.TryParseExact(
@@ -199,8 +197,8 @@ public static class Part3Modeling
                 throw new FormatException($"Invalid anchorUtcTime at line {lineNumber}: '{parts[0]}'.");
             }
 
-            var horizonTargets = new double[HorizonSteps];
-            for (var step = 0; step < HorizonSteps; step++)
+            var horizonTargets = new double[PipelineConstants.HorizonSteps];
+            for (var step = 0; step < PipelineConstants.HorizonSteps; step++)
             {
                 horizonTargets[step] = ParseRequiredDouble(parts[20 + step], lineNumber, $"Target_tPlus{step + 1}");
             }
@@ -232,7 +230,7 @@ public static class Part3Modeling
         return rows;
     }
 
-    public static Part3RunResult RunModels(IReadOnlyList<Part3InputRow> rows)
+    public static Part3RunResult RunModels(IReadOnlyList<Part3InputRow> rows, FastTreeOptions? fastTreeOptions = null)
     {
         var sorted = rows.OrderBy(row => row.AnchorUtcTime).ToList();
         var trainRows = sorted.Where(row => string.Equals(row.Split, "Train", StringComparison.OrdinalIgnoreCase)).ToList();
@@ -249,7 +247,7 @@ public static class Part3Modeling
         }
 
         var baselineModel = BuildSeasonalBaseline(trainRows);
-        var fastTreeModel = BuildFastTreeRecursiveModel(trainRows, sorted);
+        var fastTreeModel = BuildFastTreeRecursiveModel(trainRows, sorted, fastTreeOptions ?? new FastTreeOptions());
         var forecastAnchors = sorted
             .Where(row => string.Equals(row.Split, "Train", StringComparison.OrdinalIgnoreCase)
                           || string.Equals(row.Split, "Validation", StringComparison.OrdinalIgnoreCase))
@@ -288,8 +286,8 @@ public static class Part3Modeling
             trainRows.Count,
             validationRows.Count,
             [
-                new Part3ModelSummary("BaselineSeasonal", forecastAnchors.Count, HorizonSteps, baselineFallbackSteps),
-                new Part3ModelSummary("FastTreeRecursive", forecastAnchors.Count, HorizonSteps, fastTreeFallbackSteps)
+                new Part3ModelSummary("BaselineSeasonal", forecastAnchors.Count, PipelineConstants.HorizonSteps, baselineFallbackSteps),
+                new Part3ModelSummary("FastTreeRecursive", forecastAnchors.Count, PipelineConstants.HorizonSteps, fastTreeFallbackSteps)
             ]);
 
         return new Part3RunResult(forecasts, summary);
@@ -304,8 +302,8 @@ public static class Part3Modeling
         }
 
         using var writer = new StreamWriter(outputCsvPath, false);
-        var predictedColumns = Enumerable.Range(1, HorizonSteps).Select(step => $"Pred_tPlus{step}");
-        var actualColumns = Enumerable.Range(1, HorizonSteps).Select(step => $"Actual_tPlus{step}");
+        var predictedColumns = Enumerable.Range(1, PipelineConstants.HorizonSteps).Select(step => $"Pred_tPlus{step}");
+        var actualColumns = Enumerable.Range(1, PipelineConstants.HorizonSteps).Select(step => $"Actual_tPlus{step}");
         writer.WriteLine(string.Join(';',
             new[]
             {
@@ -359,12 +357,12 @@ public static class Part3Modeling
 
     private static (double[] Predictions, int FallbackSteps) PredictWithBaseline(DateTime anchorUtcTime, SeasonalBaselineModel model)
     {
-        var predictions = new double[HorizonSteps];
+        var predictions = new double[PipelineConstants.HorizonSteps];
         var fallbackSteps = 0;
 
-        for (var step = 1; step <= HorizonSteps; step++)
+        for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
         {
-            var ts = anchorUtcTime.AddMinutes(step * MinutesPerStep);
+            var ts = anchorUtcTime.AddMinutes(step * PipelineConstants.MinutesPerStep);
             var key = new SeasonalKey((int)ts.DayOfWeek, ts.Hour, ts.Minute);
             if (model.Means.TryGetValue(key, out var mean))
             {
@@ -381,9 +379,10 @@ public static class Part3Modeling
 
     private static FastTreeRecursiveModel BuildFastTreeRecursiveModel(
         IReadOnlyList<Part3InputRow> trainRows,
-        IReadOnlyList<Part3InputRow> allRows)
+        IReadOnlyList<Part3InputRow> allRows,
+        FastTreeOptions options)
     {
-        var mlContext = new MLContext(seed: 42);
+        var mlContext = new MLContext(seed: options.Seed);
 
         var trainingData = trainRows
             .Select(row => new OneStepTrainingRow
@@ -398,10 +397,10 @@ public static class Part3Modeling
         {
             FeatureColumnName = nameof(OneStepTrainingRow.Features),
             LabelColumnName = nameof(OneStepTrainingRow.Label),
-            NumberOfTrees = 300,
-            NumberOfLeaves = 32,
-            MinimumExampleCountPerLeaf = 50,
-            LearningRate = 0.05
+            NumberOfTrees = options.NumberOfTrees,
+            NumberOfLeaves = options.NumberOfLeaves,
+            MinimumExampleCountPerLeaf = options.MinimumExampleCountPerLeaf,
+            LearningRate = options.LearningRate
         });
 
         var model = trainer.Fit(dataView);
@@ -428,23 +427,23 @@ public static class Part3Modeling
         Part3InputRow anchor,
         FastTreeRecursiveModel model)
     {
-        var predictions = new double[HorizonSteps];
+        var predictions = new double[PipelineConstants.HorizonSteps];
         var fallbackSteps = 0;
 
         var baseEndIndex = UpperBound(model.HistoryTimestamps, model.HistoryTimestamps.Length, anchor.AnchorUtcTime) - 1;
         // Working timeline for this anchor: start with known past, then append each new prediction so later steps can use it as history.
         var history = new RecursiveHistoryState(model.HistoryTimestamps, model.HistoryValues, baseEndIndex);
 
-        var rolling16 = InitializeRollingWindow(history, anchor.AnchorUtcTime, 16, anchor.TargetMean16);
-        var rolling96 = InitializeRollingWindow(history, anchor.AnchorUtcTime, 96, anchor.TargetMean96);
+        var rolling16 = InitializeRollingWindow(history, anchor.AnchorUtcTime, FeatureConfig.RollingWindow16, anchor.TargetMean16);
+        var rolling96 = InitializeRollingWindow(history, anchor.AnchorUtcTime, FeatureConfig.RollingWindow96, anchor.TargetMean96);
 
         var lastTemperature = anchor.Temperature;
         var lastWindspeed = anchor.Windspeed;
         var lastSolar = anchor.SolarIrradiation;
 
-        for (var step = 1; step <= HorizonSteps; step++)
+        for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
         {
-            var currentTime = anchor.AnchorUtcTime.AddMinutes((step - 1) * MinutesPerStep);
+            var currentTime = anchor.AnchorUtcTime.AddMinutes((step - 1) * PipelineConstants.MinutesPerStep);
 
             var hasContext = model.RowByTimestamp.TryGetValue(currentTime, out var contextRow);
             var temperature = hasContext ? contextRow!.Temperature : lastTemperature;
@@ -469,8 +468,8 @@ public static class Part3Modeling
                 rolling96.Push(targetAtT);
             }
 
-            var lag192 = history.GetValueAtOrBefore(currentTime.AddMinutes(-192 * MinutesPerStep), anchor.TargetLag192);
-            var lag672 = history.GetValueAtOrBefore(currentTime.AddMinutes(-672 * MinutesPerStep), anchor.TargetLag672);
+            var lag192 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep), anchor.TargetLag192);
+            var lag672 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep), anchor.TargetLag672);
             var mean16 = rolling16.Mean;
             var std16 = rolling16.Std;
             var mean96 = rolling96.Mean;
@@ -514,7 +513,7 @@ public static class Part3Modeling
             var predicted = double.IsFinite(score) ? score : targetAtT;
             predictions[step - 1] = predicted;
 
-            var nextTimestamp = currentTime.AddMinutes(MinutesPerStep);
+            var nextTimestamp = currentTime.AddMinutes(PipelineConstants.MinutesPerStep);
             if (nextTimestamp > anchor.AnchorUtcTime)
             {
                 history.AppendPredicted(nextTimestamp, predicted);
@@ -533,7 +532,7 @@ public static class Part3Modeling
         var window = new RollingWindowStats(windowSteps);
         for (var offset = windowSteps - 1; offset >= 0; offset--)
         {
-            var timestamp = endTimestamp.AddMinutes(-offset * MinutesPerStep);
+            var timestamp = endTimestamp.AddMinutes(-offset * PipelineConstants.MinutesPerStep);
             var value = history.GetValueAtOrBefore(timestamp, fallback);
             window.AddInitial(value);
         }
