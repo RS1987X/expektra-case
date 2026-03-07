@@ -51,11 +51,51 @@ public sealed record Part3RunSummary(
 
 public sealed record Part3RunResult(
     IReadOnlyList<Part3ForecastRow> Forecasts,
-    Part3RunSummary Summary);
+    Part3RunSummary Summary,
+    Part3PfiResult? FeatureImportance);
+
+public sealed record Part3PfiFeatureResult(
+    int Rank,
+    string FeatureName,
+    double MaeDelta,
+    double MaeDeltaStdDev,
+    double RmseDelta,
+    double RmseDeltaStdDev,
+    double R2Delta,
+    double R2DeltaStdDev);
+
+public sealed record Part3PfiResult(
+    IReadOnlyList<Part3PfiFeatureResult> Features,
+    int PermutationCount,
+    int EvaluationRowCount);
 
 public static class Part3Modeling
 {
+    private const int PfiPermutationCount = 10;
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
+
+    /// <summary>Feature names in the same index order as <see cref="ToFeatureVector"/>.</summary>
+    public static readonly string[] FeatureNames =
+    [
+        "TargetAtT",
+        "Temperature",
+        "Windspeed",
+        "SolarIrradiation",
+        "HourOfDay",
+        "MinuteOfHour",
+        "DayOfWeek",
+        "IsHoliday",
+        "HourSin",
+        "HourCos",
+        "WeekdaySin",
+        "WeekdayCos",
+        "TargetLag192",
+        "TargetLag672",
+        "TargetMean16",
+        "TargetStd16",
+        "TargetMean96",
+        "TargetStd96"
+    ];
 
     private sealed record SeasonalKey(int DayOfWeek, int HourOfDay, int MinuteOfHour);
 
@@ -77,6 +117,8 @@ public static class Part3Modeling
     }
 
     private sealed record FastTreeRecursiveModel(
+        MLContext MlContext,
+        ITransformer Transformer,
         PredictionEngine<OneStepTrainingRow, OneStepPrediction> PredictionEngine,
         IReadOnlyDictionary<DateTime, Part3InputRow> RowByTimestamp,
         DateTime[] HistoryTimestamps,
@@ -248,6 +290,10 @@ public static class Part3Modeling
 
         var baselineModel = BuildSeasonalBaseline(trainRows);
         var fastTreeModel = BuildFastTreeRecursiveModel(trainRows, sorted, fastTreeOptions ?? new FastTreeOptions());
+
+        // Compute PFI on validation data using the trained FastTree model.
+        var pfiResult = ComputePermutationImportance(fastTreeModel, validationRows);
+
         var forecastAnchors = sorted
             .Where(row => string.Equals(row.Split, "Train", StringComparison.OrdinalIgnoreCase)
                           || string.Equals(row.Split, "Validation", StringComparison.OrdinalIgnoreCase))
@@ -290,7 +336,7 @@ public static class Part3Modeling
                 new Part3ModelSummary("FastTreeRecursive", forecastAnchors.Count, PipelineConstants.HorizonSteps, fastTreeFallbackSteps)
             ]);
 
-        return new Part3RunResult(forecasts, summary);
+        return new Part3RunResult(forecasts, summary, pfiResult);
     }
 
     public static void WriteForecastsCsv(IReadOnlyList<Part3ForecastRow> forecasts, string outputCsvPath)
@@ -341,6 +387,85 @@ public static class Part3Modeling
         File.WriteAllText(outputJsonPath, json);
     }
 
+    public static void WriteFeatureImportanceCsv(Part3PfiResult pfiResult, string outputCsvPath)
+    {
+        var directory = Path.GetDirectoryName(outputCsvPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        using var writer = new StreamWriter(outputCsvPath, false);
+        writer.WriteLine("Rank;FeatureName;MaeDelta;MaeDeltaStdDev;RmseDelta;RmseDeltaStdDev;R2Delta;R2DeltaStdDev");
+
+        foreach (var feature in pfiResult.Features)
+        {
+            writer.WriteLine(string.Join(';',
+                feature.Rank.ToString(InvariantCulture),
+                feature.FeatureName,
+                feature.MaeDelta.ToString(InvariantCulture),
+                feature.MaeDeltaStdDev.ToString(InvariantCulture),
+                feature.RmseDelta.ToString(InvariantCulture),
+                feature.RmseDeltaStdDev.ToString(InvariantCulture),
+                feature.R2Delta.ToString(InvariantCulture),
+                feature.R2DeltaStdDev.ToString(InvariantCulture)));
+        }
+    }
+
+    private static Part3PfiResult? ComputePermutationImportance(
+        FastTreeRecursiveModel model,
+        IReadOnlyList<Part3InputRow> validationRows)
+    {
+        if (validationRows.Count == 0)
+        {
+            return null;
+        }
+
+        var validationData = validationRows
+            .Select(row => new OneStepTrainingRow
+            {
+                Features = ToFeatureVector(row),
+                Label = (float)row.HorizonTargets[0]
+            })
+            .ToList();
+
+        var schema = BuildTrainingRowSchemaDefinition();
+        var dataView = model.MlContext.Data.LoadFromEnumerable(validationData, schema);
+
+        var pfi = model.MlContext.Regression.PermutationFeatureImportance(
+            model.Transformer,
+            dataView,
+            labelColumnName: nameof(OneStepTrainingRow.Label),
+            permutationCount: PfiPermutationCount,
+            useFeatureWeightFilter: false);
+
+        var features = pfi
+            .Select((kvp, index) => new
+            {
+                Index = index,
+                Name = index < FeatureNames.Length ? FeatureNames[index] : $"Feature_{index}",
+                MaeDelta = kvp.Value.MeanAbsoluteError.Mean,
+                MaeDeltaStdDev = kvp.Value.MeanAbsoluteError.StandardDeviation,
+                RmseDelta = kvp.Value.RootMeanSquaredError.Mean,
+                RmseDeltaStdDev = kvp.Value.RootMeanSquaredError.StandardDeviation,
+                R2Delta = kvp.Value.RSquared.Mean,
+                R2DeltaStdDev = kvp.Value.RSquared.StandardDeviation
+            })
+            .OrderByDescending(f => Math.Abs(f.MaeDelta))
+            .Select((f, rank) => new Part3PfiFeatureResult(
+                rank + 1,
+                f.Name,
+                f.MaeDelta,
+                f.MaeDeltaStdDev,
+                f.RmseDelta,
+                f.RmseDeltaStdDev,
+                f.R2Delta,
+                f.R2DeltaStdDev))
+            .ToList();
+
+        return new Part3PfiResult(features, PfiPermutationCount, validationRows.Count);
+    }
+
     private static SeasonalBaselineModel BuildSeasonalBaseline(IReadOnlyList<Part3InputRow> trainRows)
     {
         if (trainRows.Count == 0)
@@ -377,6 +502,25 @@ public static class Part3Modeling
         return (predictions, fallbackSteps);
     }
 
+    /// <summary>
+    /// Builds a <see cref="SchemaDefinition"/> for <see cref="OneStepTrainingRow"/>
+    /// that annotates the Features vector column with slot names from <see cref="FeatureNames"/>.
+    /// This enables ML.NET's <c>PermutationFeatureImportance</c> to resolve per-feature slots.
+    /// </summary>
+    private static SchemaDefinition BuildTrainingRowSchemaDefinition()
+    {
+        var schema = SchemaDefinition.Create(typeof(OneStepTrainingRow));
+        var featuresColumn = schema[nameof(OneStepTrainingRow.Features)];
+        var slotNames = new VBuffer<ReadOnlyMemory<char>>(
+            FeatureNames.Length,
+            FeatureNames.Select(n => n.AsMemory()).ToArray());
+        featuresColumn.AddAnnotation(
+            "SlotNames",
+            slotNames,
+            new VectorDataViewType(TextDataViewType.Instance, FeatureNames.Length));
+        return schema;
+    }
+
     private static FastTreeRecursiveModel BuildFastTreeRecursiveModel(
         IReadOnlyList<Part3InputRow> trainRows,
         IReadOnlyList<Part3InputRow> allRows,
@@ -392,7 +536,8 @@ public static class Part3Modeling
             })
             .ToList();
 
-        var dataView = mlContext.Data.LoadFromEnumerable(trainingData);
+        var schema = BuildTrainingRowSchemaDefinition();
+        var dataView = mlContext.Data.LoadFromEnumerable(trainingData, schema);
         var trainer = mlContext.Regression.Trainers.FastTree(new Microsoft.ML.Trainers.FastTree.FastTreeRegressionTrainer.Options
         {
             FeatureColumnName = nameof(OneStepTrainingRow.Features),
@@ -420,7 +565,7 @@ public static class Part3Modeling
         var historyTimestamps = historyRows.Select(row => row.AnchorUtcTime).ToArray();
         var historyValues = historyRows.Select(row => row.TargetAtT).ToArray();
 
-        return new FastTreeRecursiveModel(predictionEngine, rowByTimestamp, historyTimestamps, historyValues);
+        return new FastTreeRecursiveModel(mlContext, model, predictionEngine, rowByTimestamp, historyTimestamps, historyValues);
     }
 
     private static (double[] Predictions, int FallbackSteps) PredictWithFastTreeRecursive(

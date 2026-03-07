@@ -234,6 +234,134 @@ public class Part3ModelingTests
         }
     }
 
+    [Fact]
+    public void Pfi_ResultHas18FeaturesWithFiniteMetrics()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 6);
+
+        var result = Part3Modeling.RunModels(rows);
+
+        Assert.NotNull(result.FeatureImportance);
+        Assert.Equal(18, result.FeatureImportance.Features.Count);
+        Assert.Equal(10, result.FeatureImportance.PermutationCount);
+        Assert.Equal(6, result.FeatureImportance.EvaluationRowCount);
+
+        Assert.All(result.FeatureImportance.Features, feature =>
+        {
+            Assert.False(string.IsNullOrEmpty(feature.FeatureName));
+            Assert.True(double.IsFinite(feature.MaeDelta));
+            Assert.True(double.IsFinite(feature.MaeDeltaStdDev));
+            Assert.True(double.IsFinite(feature.RmseDelta));
+            Assert.True(double.IsFinite(feature.RmseDeltaStdDev));
+            Assert.True(double.IsFinite(feature.R2Delta));
+            Assert.True(double.IsFinite(feature.R2DeltaStdDev));
+        });
+    }
+
+    [Fact]
+    public void Pfi_FeaturesArRankedByAbsoluteMAEDeltaDescending()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 6);
+
+        var result = Part3Modeling.RunModels(rows);
+
+        Assert.NotNull(result.FeatureImportance);
+        var features = result.FeatureImportance.Features;
+
+        for (var i = 0; i < features.Count; i++)
+        {
+            Assert.Equal(i + 1, features[i].Rank);
+        }
+
+        for (var i = 1; i < features.Count; i++)
+        {
+            Assert.True(
+                Math.Abs(features[i - 1].MaeDelta) >= Math.Abs(features[i].MaeDelta),
+                $"Feature at rank {features[i - 1].Rank} (|MAE|={Math.Abs(features[i - 1].MaeDelta)}) should have >= |MAE| than rank {features[i].Rank} (|MAE|={Math.Abs(features[i].MaeDelta)})");
+        }
+    }
+
+    [Fact]
+    public void Pfi_IsDeterministicAcrossRuns()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 4);
+
+        var result1 = Part3Modeling.RunModels(rows);
+        var result2 = Part3Modeling.RunModels(rows);
+
+        Assert.NotNull(result1.FeatureImportance);
+        Assert.NotNull(result2.FeatureImportance);
+
+        for (var i = 0; i < result1.FeatureImportance.Features.Count; i++)
+        {
+            var f1 = result1.FeatureImportance.Features[i];
+            var f2 = result2.FeatureImportance.Features[i];
+            Assert.Equal(f1.FeatureName, f2.FeatureName);
+            Assert.Equal(f1.Rank, f2.Rank);
+            Assert.Equal(f1.MaeDelta, f2.MaeDelta, 12);
+            Assert.Equal(f1.RmseDelta, f2.RmseDelta, 12);
+            Assert.Equal(f1.R2Delta, f2.R2Delta, 12);
+        }
+    }
+
+    [Fact]
+    public void Pfi_FeatureNamesMatchExpectedListAndVectorTypeLength()
+    {
+        var expectedNames = new[]
+        {
+            "TargetAtT", "Temperature", "Windspeed", "SolarIrradiation",
+            "HourOfDay", "MinuteOfHour", "DayOfWeek", "IsHoliday",
+            "HourSin", "HourCos", "WeekdaySin", "WeekdayCos",
+            "TargetLag192", "TargetLag672", "TargetMean16", "TargetStd16",
+            "TargetMean96", "TargetStd96"
+        };
+
+        Assert.Equal(expectedNames.Length, Part3Modeling.FeatureNames.Length);
+        Assert.Equal(expectedNames, Part3Modeling.FeatureNames);
+
+        // Verify the FeatureNames length matches the VectorType dimension (18)
+        Assert.Equal(18, Part3Modeling.FeatureNames.Length);
+    }
+
+    [Fact]
+    public void Pfi_WriteFeatureImportanceCsv_WritesExpectedFormat()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 4);
+        var result = Part3Modeling.RunModels(rows);
+
+        Assert.NotNull(result.FeatureImportance);
+
+        var outputDir = Path.Combine(Path.GetTempPath(), $"pfi-csv-test-{Guid.NewGuid():N}");
+        var csvPath = Path.Combine(outputDir, "feature_importance.csv");
+
+        try
+        {
+            Part3Modeling.WriteFeatureImportanceCsv(result.FeatureImportance, csvPath);
+
+            Assert.True(File.Exists(csvPath));
+            var lines = File.ReadAllLines(csvPath);
+            Assert.Equal(19, lines.Length); // header + 18 features
+
+            Assert.Equal("Rank;FeatureName;MaeDelta;MaeDeltaStdDev;RmseDelta;RmseDeltaStdDev;R2Delta;R2DeltaStdDev", lines[0]);
+
+            // Verify each data row has 8 columns
+            for (var i = 1; i < lines.Length; i++)
+            {
+                var parts = lines[i].Split(';');
+                Assert.Equal(8, parts.Length);
+                Assert.True(int.TryParse(parts[0], out _), $"Rank column should be integer at line {i}");
+                Assert.False(string.IsNullOrEmpty(parts[1]), $"FeatureName should not be empty at line {i}");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(outputDir))
+            {
+                Directory.Delete(outputDir, true);
+            }
+        }
+    }
+
     private static List<Part3InputRow> BuildSyntheticPart3Rows(int trainCount, int validationCount)
     {
         var rows = new List<Part3InputRow>(trainCount + validationCount);

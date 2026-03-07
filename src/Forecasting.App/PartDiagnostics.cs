@@ -92,7 +92,8 @@ public sealed record DiagnosticsRunResult(
     IReadOnlyList<DiagnosticsHorizonStepSummary> ValidationHorizonSummaries,
     IReadOnlyList<DiagnosticsSamplePoint> SamplePoints,
     IReadOnlyList<DiagnosticsTargetPoint> TargetSeries,
-    IReadOnlyList<DiagnosticsOverlayPoint> OverlayPoints);
+    IReadOnlyList<DiagnosticsOverlayPoint> OverlayPoints,
+    IReadOnlyList<Part3PfiFeatureResult>? FeatureImportance = null);
 
 public static class PartDiagnostics
 {
@@ -138,6 +139,11 @@ public static class PartDiagnostics
 
     public static DiagnosticsRunResult RunDiagnostics(string part2InputCsvPath, string part3PredictionsCsvPath)
     {
+        return RunDiagnostics(part2InputCsvPath, part3PredictionsCsvPath, pfiCsvPath: null);
+    }
+
+    public static DiagnosticsRunResult RunDiagnostics(string part2InputCsvPath, string part3PredictionsCsvPath, string? pfiCsvPath)
+    {
         var rows = Part3Modeling.ReadPart2DatasetCsv(part2InputCsvPath);
         var preModel = BuildPreModelSummaries(rows);
         var cadence = BuildCadenceSummaries(rows);
@@ -156,6 +162,12 @@ public static class PartDiagnostics
             .Select(row => new DiagnosticsTargetPoint(row.AnchorUtcTime, NormalizeSplit(row.Split), row.TargetAtT))
             .ToList();
 
+        IReadOnlyList<Part3PfiFeatureResult>? featureImportance = null;
+        if (!string.IsNullOrWhiteSpace(pfiCsvPath) && File.Exists(pfiCsvPath))
+        {
+            featureImportance = ReadFeatureImportanceCsv(pfiCsvPath);
+        }
+
         return new DiagnosticsRunResult(
             DateTime.UtcNow,
             preModel,
@@ -165,7 +177,8 @@ public static class PartDiagnostics
             validationHorizonSummaries,
             samplePoints,
             targetSeries,
-            overlayPoints);
+            overlayPoints,
+            featureImportance);
     }
 
     public static void WriteArtifacts(DiagnosticsRunResult result, string outputDirectory)
@@ -181,6 +194,12 @@ public static class PartDiagnostics
         WriteTargetSeriesSvg(result, Path.Combine(outputDirectory, "target_over_time.svg"));
         WriteSplitOverlaySvgs(result, outputDirectory);
         WriteValidationHorizonSvg(result, Path.Combine(outputDirectory, "postmodel_validation_error_by_horizon.svg"));
+
+        if (result.FeatureImportance is { Count: > 0 })
+        {
+            WriteFeatureImportanceSvg(result.FeatureImportance, Path.Combine(outputDirectory, "feature_importance.svg"));
+        }
+
         WriteHtmlReport(result, Path.Combine(outputDirectory, "diagnostics_report.html"));
     }
 
@@ -391,6 +410,7 @@ public static class PartDiagnostics
         AppendTargetSeriesPlot(sb, result.TargetSeries);
         AppendValidationHorizonPlot(sb, result.ValidationHorizonSummaries);
         AppendSplitOverlayPlots(sb, result.OverlayPoints);
+        AppendFeatureImportanceSection(sb, result.FeatureImportance);
         AppendPreModelTable(sb, result.PreModelSummaries);
         AppendCadenceTable(sb, result.CadenceSummaries);
         AppendResidualTable(sb, result.ResidualSummaries);
@@ -1283,6 +1303,113 @@ public static class PartDiagnostics
             svg.AppendLine($"<text x=\"75\" y=\"{y}\" font-size=\"11\" fill=\"#1565c0\">{Escape(modelSeries[modelIndex].ModelName)} (Predicted)</text>");
         }
 
+        svg.AppendLine("</svg>");
+        return svg.ToString();
+    }
+
+    public static IReadOnlyList<Part3PfiFeatureResult> ReadFeatureImportanceCsv(string csvPath)
+    {
+        var results = new List<Part3PfiFeatureResult>();
+        using var reader = new StreamReader(csvPath);
+        var header = reader.ReadLine(); // skip header
+        while (reader.ReadLine() is { } line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            var parts = line.Split(';');
+            if (parts.Length < 8)
+            {
+                continue;
+            }
+
+            results.Add(new Part3PfiFeatureResult(
+                int.Parse(parts[0], InvariantCulture),
+                parts[1],
+                double.Parse(parts[2], InvariantCulture),
+                double.Parse(parts[3], InvariantCulture),
+                double.Parse(parts[4], InvariantCulture),
+                double.Parse(parts[5], InvariantCulture),
+                double.Parse(parts[6], InvariantCulture),
+                double.Parse(parts[7], InvariantCulture)));
+        }
+
+        return results;
+    }
+
+    public static void WriteFeatureImportanceSvg(IReadOnlyList<Part3PfiFeatureResult> features, string outputSvgPath)
+    {
+        EnsureOutputDirectory(outputSvgPath);
+        File.WriteAllText(outputSvgPath, BuildFeatureImportanceSvg(features));
+    }
+
+    private static void AppendFeatureImportanceSection(StringBuilder sb, IReadOnlyList<Part3PfiFeatureResult>? features)
+    {
+        if (features is not { Count: > 0 })
+        {
+            return;
+        }
+
+        sb.AppendLine("<h2>Feature importance (PFI)</h2>");
+        sb.AppendLine(BuildFeatureImportanceSvg(features));
+
+        sb.AppendLine("<table><tr><th>Rank</th><th>Feature</th><th>MAE delta</th><th>MAE &sigma;</th><th>RMSE delta</th><th>RMSE &sigma;</th><th>R&sup2; delta</th><th>R&sup2; &sigma;</th></tr>");
+        foreach (var feature in features.OrderBy(f => f.Rank))
+        {
+            sb.AppendLine($"<tr><td>{feature.Rank}</td><td style=\"text-align:left\">{Escape(feature.FeatureName)}</td>" +
+                $"<td>{feature.MaeDelta.ToString("F6", InvariantCulture)}</td><td>{feature.MaeDeltaStdDev.ToString("F6", InvariantCulture)}</td>" +
+                $"<td>{feature.RmseDelta.ToString("F6", InvariantCulture)}</td><td>{feature.RmseDeltaStdDev.ToString("F6", InvariantCulture)}</td>" +
+                $"<td>{feature.R2Delta.ToString("F6", InvariantCulture)}</td><td>{feature.R2DeltaStdDev.ToString("F6", InvariantCulture)}</td></tr>");
+        }
+
+        sb.AppendLine("</table>");
+    }
+
+    private static string BuildFeatureImportanceSvg(IReadOnlyList<Part3PfiFeatureResult> features)
+    {
+        static string F2(double value) => value.ToString("F2", InvariantCulture);
+
+        var ordered = features.OrderBy(f => f.Rank).ToList();
+        var barCount = ordered.Count;
+        if (barCount == 0)
+        {
+            return "<p>No feature importance data available.</p>";
+        }
+
+        const double leftMargin = 160d;
+        const double rightMargin = 20d;
+        const double topMargin = 20d;
+        const double barHeight = 18d;
+        const double barGap = 4d;
+        var svgWidth = 960d;
+        var svgHeight = topMargin + barCount * (barHeight + barGap) + 30d;
+
+        var maxAbsMae = ordered.Max(f => Math.Abs(f.MaeDelta));
+        if (maxAbsMae < 1e-12)
+        {
+            maxAbsMae = 1d;
+        }
+
+        var chartWidth = svgWidth - leftMargin - rightMargin;
+
+        var svg = new StringBuilder();
+        svg.AppendLine($"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {F2(svgWidth)} {F2(svgHeight)}\" width=\"{(int)svgWidth}\" height=\"{(int)svgHeight}\" role=\"img\" aria-label=\"Feature importance (PFI)\">");
+
+        for (var index = 0; index < ordered.Count; index++)
+        {
+            var feature = ordered[index];
+            var y = topMargin + index * (barHeight + barGap);
+            var barWidth = Math.Abs(feature.MaeDelta) / maxAbsMae * chartWidth;
+            var color = feature.MaeDelta >= 0 ? "#1565c0" : "#c62828";
+
+            svg.AppendLine($"<text x=\"{F2(leftMargin - 6d)}\" y=\"{F2(y + barHeight / 2d + 4d)}\" text-anchor=\"end\" font-size=\"11\" fill=\"#333\">{Escape(feature.FeatureName)}</text>");
+            svg.AppendLine($"<rect x=\"{F2(leftMargin)}\" y=\"{F2(y)}\" width=\"{F2(barWidth)}\" height=\"{F2(barHeight)}\" fill=\"{color}\" opacity=\"0.8\" />");
+            svg.AppendLine($"<text x=\"{F2(leftMargin + barWidth + 4d)}\" y=\"{F2(y + barHeight / 2d + 4d)}\" font-size=\"10\" fill=\"#666\">{feature.MaeDelta.ToString("F4", InvariantCulture)}</text>");
+        }
+
+        svg.AppendLine($"<text x=\"{F2(leftMargin + chartWidth / 2d)}\" y=\"{F2(svgHeight - 4d)}\" text-anchor=\"middle\" font-size=\"11\" fill=\"#444\">|MAE delta| (higher = more important)</text>");
         svg.AppendLine("</svg>");
         return svg.ToString();
     }

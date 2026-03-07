@@ -15,6 +15,7 @@ if (args.Length == 0 || (args.Length > 0 && string.Equals(args[0], "all", String
 	var part2SummaryPath = Path.Combine("artifacts", "part2_supervised_matrix.summary.json");
 	var part3OutputPath = Path.Combine("artifacts", "part3_predictions.csv");
 	var part3SummaryPath = Path.Combine("artifacts", "part3_predictions.summary.json");
+	var part3PfiOutputPath = Path.Combine("artifacts", "part3_feature_importance.csv");
 	var part4MetricsOutputPath = Path.Combine("artifacts", "part4_metrics.csv");
 	var part4SampleOutputPath = Path.Combine("artifacts", "part4_pred_vs_actual_sample.csv");
 	var diagnosticsOutputDirectory = Path.Combine("artifacts", "diagnostics");
@@ -46,6 +47,11 @@ if (args.Length == 0 || (args.Length > 0 && string.Equals(args[0], "all", String
 	var part3Result = Part3Modeling.RunModels(part3Rows);
 	Part3Modeling.WriteForecastsCsv(part3Result.Forecasts, part3OutputPath);
 	Part3Modeling.WriteSummaryJson(part3Result.Summary, part3SummaryPath);
+	if (part3Result.FeatureImportance is not null)
+	{
+		Part3Modeling.WriteFeatureImportanceCsv(part3Result.FeatureImportance, part3PfiOutputPath);
+		Console.WriteLine($"Part 3 PFI complete: {part3Result.FeatureImportance.Features.Count} features -> {part3PfiOutputPath}");
+	}
 	Console.WriteLine($"Part 3 complete: {part3Result.Forecasts.Count} forecasts -> {part3OutputPath}");
 
 	var part4Result = Part4Evaluation.RunEvaluation(part2OutputPath, part3OutputPath);
@@ -53,7 +59,7 @@ if (args.Length == 0 || (args.Length > 0 && string.Equals(args[0], "all", String
 	Part4Evaluation.WriteSampleCsv(part4Result, part4SampleOutputPath);
 	Console.WriteLine($"Part 4 complete: metrics -> {part4MetricsOutputPath}");
 
-	var diagnosticsResult = PartDiagnostics.RunDiagnostics(part2OutputPath, part3OutputPath);
+	var diagnosticsResult = PartDiagnostics.RunDiagnostics(part2OutputPath, part3OutputPath, part3PfiOutputPath);
 	PartDiagnostics.WriteArtifacts(diagnosticsResult, diagnosticsOutputDirectory);
 	Console.WriteLine($"Diagnostics complete: {diagnosticsOutputDirectory}");
 	return;
@@ -64,6 +70,7 @@ if (args.Length > 0 && string.Equals(args[0], "diagnostics", StringComparison.Or
 	var diagnosticsInputPath = args.Length > 1 ? args[1] : Path.Combine("artifacts", "part2_supervised_matrix.csv");
 	var diagnosticsPredictionsPath = args.Length > 2 ? args[2] : Path.Combine("artifacts", "part3_predictions.csv");
 	var diagnosticsOutputDirectory = args.Length > 3 ? args[3] : Path.Combine("artifacts", "diagnostics");
+	var diagnosticsPfiPath = args.Length > 4 ? args[4] : Path.Combine("artifacts", "part3_feature_importance.csv");
 
 	if (!File.Exists(diagnosticsInputPath))
 	{
@@ -79,7 +86,7 @@ if (args.Length > 0 && string.Equals(args[0], "diagnostics", StringComparison.Or
 		return;
 	}
 
-	var diagnosticsResult = PartDiagnostics.RunDiagnostics(diagnosticsInputPath, diagnosticsPredictionsPath);
+	var diagnosticsResult = PartDiagnostics.RunDiagnostics(diagnosticsInputPath, diagnosticsPredictionsPath, diagnosticsPfiPath);
 	PartDiagnostics.WriteArtifacts(diagnosticsResult, diagnosticsOutputDirectory);
 
 	Console.WriteLine("Diagnostics residual summary:");
@@ -153,6 +160,14 @@ if (args.Length > 0 && string.Equals(args[0], "part3", StringComparison.OrdinalI
 	var part3Result = Part3Modeling.RunModels(part3Rows);
 	Part3Modeling.WriteForecastsCsv(part3Result.Forecasts, part3OutputPath);
 	Part3Modeling.WriteSummaryJson(part3Result.Summary, part3SummaryPath);
+	if (part3Result.FeatureImportance is not null)
+	{
+		var part3PfiPath = Path.Combine(
+			Path.GetDirectoryName(part3OutputPath) ?? "artifacts",
+			"part3_feature_importance.csv");
+		Part3Modeling.WriteFeatureImportanceCsv(part3Result.FeatureImportance, part3PfiPath);
+		Console.WriteLine($"Saved Part 3 PFI to: {part3PfiPath}");
+	}
 
 	Console.WriteLine($"Part 3 models: {string.Join(", ", part3Result.Summary.Models.Select(model => model.ModelName))}");
 	Console.WriteLine($"Generated {part3Result.Forecasts.Count} forecast rows.");
