@@ -57,3 +57,7 @@
 - Follow-up action: document and surface the observed long-season pattern in target behavior (lower summers, higher winters) in diagnostics output and/or summary notes so model interpretation is explicit.
 - Follow-up action: add a simpler one-command entrypoint/task for running the Part 1 pipeline and writing its artifacts, so the first phase is easy to execute repeatedly.
 - Follow-up action: add a second FastTree variant that includes month-of-year seasonality features (for example month cyclic encoding) and evaluate it side-by-side with the current FastTree feature set; keep the current FastTree path unchanged/default so existing runs remain reproducible.
+
+## Phase 1.b follow-up
+
+- Follow-up action: add a full end-to-end baseline-vs-hybrid `all`-mode parity benchmark that compares Part1/Part2/Part3 row counts, Part4 metrics (`MAE`, `RMSE`, `MAPE`) with absolute tolerance `1e-9`, and diagnostics summary shape/groupings. This is intentionally deferred from per-PR blocking tests because it is long-running and would significantly increase local/CI runtime.

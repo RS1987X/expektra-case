@@ -77,14 +77,13 @@ public static class PipelineRunner
         Part1Preprocessing.WritePreprocessingSummaryJson(preprocessed.AuditSummary, part1AuditSummaryOutputPath);
         AddOutputLine(lines, $"Part 1 complete: {preprocessed.PersistedFeatures.Count} rows -> {part1OutputPath} (validation window: {validationWindowDays} days)", output);
 
-        var part1Rows = Part2FeatureEngineering.ReadFeatureMatrixCsv(part1OutputPath);
-        var allValidationStartUtc = part1Rows.Max(row => row.UtcTime).AddDays(-validationWindowDays);
-        var part2Dataset = Part2FeatureEngineering.BuildDataset(part1Rows, allValidationStartUtc);
+        var allValidationStartUtc = preprocessed.PersistedFeatures.Max(row => row.UtcTime).AddDays(-validationWindowDays);
+        var part2Dataset = Part2FeatureEngineering.BuildDataset(preprocessed.PersistedFeatures, allValidationStartUtc);
         Part2FeatureEngineering.WriteDatasetCsv(part2Dataset.Rows, part2OutputPath);
         Part2FeatureEngineering.WriteSummaryJson(part2Dataset.Summary, part2SummaryPath);
         AddOutputLine(lines, $"Part 2 complete: {part2Dataset.Summary.OutputRows} rows -> {part2OutputPath} (validation window: {validationWindowDays} days)", output);
 
-        var part3Rows = Part3Modeling.ReadPart2DatasetCsv(part2OutputPath);
+        var part3Rows = Part3Modeling.FromPart2DatasetRows(part2Dataset.Rows);
         var part3Result = Part3Modeling.RunModels(part3Rows, enablePfi: request.EnablePfi, pfiHorizonStep: request.PfiHorizonStep);
         Part3Modeling.WriteForecastsCsv(part3Result.Forecasts, part3OutputPath);
         Part3Modeling.WriteSummaryJson(part3Result.Summary, part3SummaryPath);
@@ -96,12 +95,12 @@ public static class PipelineRunner
 
         AddOutputLine(lines, $"Part 3 complete: {part3Result.Forecasts.Count} forecasts -> {part3OutputPath}", output);
 
-        var part4Result = Part4Evaluation.RunEvaluation(part2OutputPath, part3OutputPath);
+        var part4Result = Part4Evaluation.RunEvaluation(part3Rows, part3Result.Forecasts);
         Part4Evaluation.WriteMetricsCsv(part4Result, part4MetricsOutputPath);
         Part4Evaluation.WriteSampleCsv(part4Result, part4SampleOutputPath);
         AddOutputLine(lines, $"Part 4 complete: metrics -> {part4MetricsOutputPath}", output);
 
-        var diagnosticsResult = PartDiagnostics.RunDiagnostics(part2OutputPath, part3OutputPath, part3PfiOutputPath);
+        var diagnosticsResult = PartDiagnostics.RunDiagnostics(part3Rows, part3Result.Forecasts, part3Result.FeatureImportance?.Features);
         PartDiagnostics.WriteArtifacts(diagnosticsResult, diagnosticsOutputDirectory);
         AddOutputLine(lines, $"Diagnostics complete: {diagnosticsOutputDirectory}", output);
 
