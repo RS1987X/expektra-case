@@ -19,10 +19,14 @@ public sealed record Part2SupervisedRow(
     double WeekdayCos,
     double TargetLag192,
     double TargetLag672,
-    double TargetMean16,
-    double TargetStd16,
-    double TargetMean96,
-    double TargetStd96,
+    double TargetLag192Mean16,
+    double TargetLag192Std16,
+    double TargetLag192Mean96,
+    double TargetLag192Std96,
+    double TargetLag672Mean16,
+    double TargetLag672Std16,
+    double TargetLag672Mean96,
+    double TargetLag672Std96,
     string Split,
     IReadOnlyList<double> HorizonTargets);
 
@@ -110,9 +114,19 @@ public static class Part2FeatureEngineering
 
         var effectiveValidationStart = validationStartUtc ?? sorted[^1].UtcTime.AddDays(-PipelineConstants.DefaultValidationWindowDays);
 
+        const int rollingMinLag192 = FeatureConfig.TargetLag192;
+        const int rollingMinLag672 = FeatureConfig.TargetLag672;
         // This gate only ensures enough history exists to compute lag/rolling features.
         // Split safety/leakage control is handled later by horizon-based train/validation eligibility and purge.
-        var maxLookback = new[] { FeatureConfig.TargetLag192, FeatureConfig.TargetLag672, FeatureConfig.RollingWindow16, FeatureConfig.RollingWindow96 }.Max();
+        var maxLookback = new[]
+        {
+            FeatureConfig.TargetLag192,
+            FeatureConfig.TargetLag672,
+            rollingMinLag192 + (FeatureConfig.RollingWindow16 - 1),
+            rollingMinLag192 + (FeatureConfig.RollingWindow96 - 1),
+            rollingMinLag672 + (FeatureConfig.RollingWindow16 - 1),
+            rollingMinLag672 + (FeatureConfig.RollingWindow96 - 1)
+        }.Max();
 
         var lastAnchorIndex = sorted.Count - 1 - PipelineConstants.HorizonSteps;
         if (lastAnchorIndex < maxLookback)
@@ -157,10 +171,18 @@ public static class Part2FeatureEngineering
 
             var lagValue192 = sorted[anchorIndex - FeatureConfig.TargetLag192].Target;
             var lagValue672 = sorted[anchorIndex - FeatureConfig.TargetLag672].Target;
-            var mean16 = CalculateMean(sorted, anchorIndex - (FeatureConfig.RollingWindow16 - 1), anchorIndex);
-            var std16 = CalculatePopulationStd(sorted, anchorIndex - (FeatureConfig.RollingWindow16 - 1), anchorIndex, mean16);
-            var mean96 = CalculateMean(sorted, anchorIndex - (FeatureConfig.RollingWindow96 - 1), anchorIndex);
-            var std96 = CalculatePopulationStd(sorted, anchorIndex - (FeatureConfig.RollingWindow96 - 1), anchorIndex, mean96);
+            // Assignment requirement: rolling stats must be computed on lagged history.
+            var rollingEndIndex192 = anchorIndex - rollingMinLag192;
+            var mean16 = CalculateMean(sorted, rollingEndIndex192 - (FeatureConfig.RollingWindow16 - 1), rollingEndIndex192);
+            var std16 = CalculatePopulationStd(sorted, rollingEndIndex192 - (FeatureConfig.RollingWindow16 - 1), rollingEndIndex192, mean16);
+            var mean96 = CalculateMean(sorted, rollingEndIndex192 - (FeatureConfig.RollingWindow96 - 1), rollingEndIndex192);
+            var std96 = CalculatePopulationStd(sorted, rollingEndIndex192 - (FeatureConfig.RollingWindow96 - 1), rollingEndIndex192, mean96);
+
+            var rollingEndIndex672 = anchorIndex - rollingMinLag672;
+            var mean16Lag672 = CalculateMean(sorted, rollingEndIndex672 - (FeatureConfig.RollingWindow16 - 1), rollingEndIndex672);
+            var std16Lag672 = CalculatePopulationStd(sorted, rollingEndIndex672 - (FeatureConfig.RollingWindow16 - 1), rollingEndIndex672, mean16Lag672);
+            var mean96Lag672 = CalculateMean(sorted, rollingEndIndex672 - (FeatureConfig.RollingWindow96 - 1), rollingEndIndex672);
+            var std96Lag672 = CalculatePopulationStd(sorted, rollingEndIndex672 - (FeatureConfig.RollingWindow96 - 1), rollingEndIndex672, mean96Lag672);
 
             var horizonTargets = new double[PipelineConstants.HorizonSteps];
             for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
@@ -198,6 +220,10 @@ public static class Part2FeatureEngineering
                 std16,
                 mean96,
                 std96,
+                mean16Lag672,
+                std16Lag672,
+                mean96Lag672,
+                std96Lag672,
                 split,
                 horizonTargets));
         }
@@ -245,10 +271,14 @@ public static class Part2FeatureEngineering
                 "WeekdayCos",
                 "TargetLag192",
                 "TargetLag672",
-                "TargetMean16",
-                "TargetStd16",
-                "TargetMean96",
-                "TargetStd96",
+                "TargetLag192Mean16",
+                "TargetLag192Std16",
+                "TargetLag192Mean96",
+                "TargetLag192Std96",
+                "TargetLag672Mean16",
+                "TargetLag672Std16",
+                "TargetLag672Mean96",
+                "TargetLag672Std96",
                 "Split"
             }.Concat(horizonColumns)));
 
@@ -271,10 +301,14 @@ public static class Part2FeatureEngineering
                 row.WeekdayCos.ToString(InvariantCulture),
                 row.TargetLag192.ToString(InvariantCulture),
                 row.TargetLag672.ToString(InvariantCulture),
-                row.TargetMean16.ToString(InvariantCulture),
-                row.TargetStd16.ToString(InvariantCulture),
-                row.TargetMean96.ToString(InvariantCulture),
-                row.TargetStd96.ToString(InvariantCulture),
+                row.TargetLag192Mean16.ToString(InvariantCulture),
+                row.TargetLag192Std16.ToString(InvariantCulture),
+                row.TargetLag192Mean96.ToString(InvariantCulture),
+                row.TargetLag192Std96.ToString(InvariantCulture),
+                row.TargetLag672Mean16.ToString(InvariantCulture),
+                row.TargetLag672Std16.ToString(InvariantCulture),
+                row.TargetLag672Mean96.ToString(InvariantCulture),
+                row.TargetLag672Std96.ToString(InvariantCulture),
                 row.Split
             };
 

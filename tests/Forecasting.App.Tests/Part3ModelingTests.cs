@@ -235,14 +235,14 @@ public class Part3ModelingTests
     }
 
     [Fact]
-    public void Pfi_ResultHas18FeaturesWithFiniteMetrics()
+    public void Pfi_ResultHas21FeaturesWithFiniteMetrics()
     {
         var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 6);
 
         var result = Part3Modeling.RunModels(rows);
 
         Assert.NotNull(result.FeatureImportance);
-        Assert.Equal(18, result.FeatureImportance.Features.Count);
+        Assert.Equal(21, result.FeatureImportance.Features.Count);
         Assert.Equal(10, result.FeatureImportance.PermutationCount);
         Assert.Equal(6, result.FeatureImportance.EvaluationRowCount);
 
@@ -309,18 +309,19 @@ public class Part3ModelingTests
     {
         var expectedNames = new[]
         {
-            "TargetAtT", "Temperature", "Windspeed", "SolarIrradiation",
+            "Temperature", "Windspeed", "SolarIrradiation",
             "HourOfDay", "MinuteOfHour", "DayOfWeek", "IsHoliday",
             "HourSin", "HourCos", "WeekdaySin", "WeekdayCos",
-            "TargetLag192", "TargetLag672", "TargetMean16", "TargetStd16",
-            "TargetMean96", "TargetStd96"
+            "TargetLag192", "TargetLag672", "TargetLag192Mean16", "TargetLag192Std16",
+            "TargetLag192Mean96", "TargetLag192Std96",
+            "TargetLag672Mean16", "TargetLag672Std16", "TargetLag672Mean96", "TargetLag672Std96"
         };
 
         Assert.Equal(expectedNames.Length, Part3Modeling.FeatureNames.Length);
         Assert.Equal(expectedNames, Part3Modeling.FeatureNames);
 
-        // Verify the FeatureNames length matches the VectorType dimension (18)
-        Assert.Equal(18, Part3Modeling.FeatureNames.Length);
+        // Verify expected schema width stays in sync with the centralized feature definitions.
+        Assert.Equal(expectedNames.Length, Part3Modeling.FeatureNames.Length);
     }
 
     [Fact]
@@ -340,7 +341,7 @@ public class Part3ModelingTests
 
             Assert.True(File.Exists(csvPath));
             var lines = File.ReadAllLines(csvPath);
-            Assert.Equal(19, lines.Length); // header + 18 features
+            Assert.Equal(22, lines.Length); // header + 21 features
 
             Assert.Equal("Rank;FeatureName;MaeDelta;MaeDeltaStdDev;RmseDelta;RmseDeltaStdDev;R2Delta;R2DeltaStdDev", lines[0]);
 
@@ -408,6 +409,10 @@ public class Part3ModelingTests
                 0.2,
                 target - 1.0,
                 0.4,
+                target - 2.5,
+                0.3,
+                target - 3.0,
+                0.5,
                 split,
                 horizon));
         }
@@ -453,10 +458,14 @@ public class Part3ModelingTests
             "WeekdayCos",
             "TargetLag192",
             "TargetLag672",
-            "TargetMean16",
-            "TargetStd16",
-            "TargetMean96",
-            "TargetStd96",
+            "TargetLag192Mean16",
+            "TargetLag192Std16",
+            "TargetLag192Mean96",
+            "TargetLag192Std96",
+            "TargetLag672Mean16",
+            "TargetLag672Std16",
+            "TargetLag672Mean96",
+            "TargetLag672Std96",
             "Split"
         };
 
@@ -492,6 +501,10 @@ public class Part3ModelingTests
             "0.1",
             "100",
             "0.2",
+            "98",
+            "0.3",
+            "97",
+            "0.4",
             "Train"
         };
 

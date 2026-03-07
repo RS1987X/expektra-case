@@ -21,10 +21,14 @@ public sealed record Part3InputRow(
     double WeekdayCos,
     double TargetLag192,
     double TargetLag672,
-    double TargetMean16,
-    double TargetStd16,
-    double TargetMean96,
-    double TargetStd96,
+    double TargetLag192Mean16,
+    double TargetLag192Std16,
+    double TargetLag192Mean96,
+    double TargetLag192Std96,
+    double TargetLag672Mean16,
+    double TargetLag672Std16,
+    double TargetLag672Mean96,
+    double TargetLag672Std96,
     string Split,
     IReadOnlyList<double> HorizonTargets);
 
@@ -72,30 +76,70 @@ public sealed record Part3PfiResult(
 public static class Part3Modeling
 {
     private const int PfiPermutationCount = 10;
+    private const int FeatureCount = 21;
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
 
-    /// <summary>Feature names in the same index order as <see cref="ToFeatureVector"/>.</summary>
-    public static readonly string[] FeatureNames =
+    private sealed record FeatureDefinition(string Name, Func<FeatureSnapshot, float> Selector);
+
+    private sealed record FeatureSnapshot(
+        double TargetAtT,
+        double Temperature,
+        double Windspeed,
+        double SolarIrradiation,
+        int HourOfDay,
+        int MinuteOfHour,
+        int DayOfWeek,
+        bool IsHoliday,
+        double HourSin,
+        double HourCos,
+        double WeekdaySin,
+        double WeekdayCos,
+        double TargetLag192,
+        double TargetLag672,
+        double TargetLag192Mean16,
+        double TargetLag192Std16,
+        double TargetLag192Mean96,
+        double TargetLag192Std96,
+        double TargetLag672Mean16,
+        double TargetLag672Std16,
+        double TargetLag672Mean96,
+        double TargetLag672Std96);
+
+    private static readonly FeatureDefinition[] FeatureDefinitions =
     [
-        "TargetAtT",
-        "Temperature",
-        "Windspeed",
-        "SolarIrradiation",
-        "HourOfDay",
-        "MinuteOfHour",
-        "DayOfWeek",
-        "IsHoliday",
-        "HourSin",
-        "HourCos",
-        "WeekdaySin",
-        "WeekdayCos",
-        "TargetLag192",
-        "TargetLag672",
-        "TargetMean16",
-        "TargetStd16",
-        "TargetMean96",
-        "TargetStd96"
+        new("Temperature", snapshot => (float)snapshot.Temperature),
+        new("Windspeed", snapshot => (float)snapshot.Windspeed),
+        new("SolarIrradiation", snapshot => (float)snapshot.SolarIrradiation),
+        new("HourOfDay", snapshot => snapshot.HourOfDay),
+        new("MinuteOfHour", snapshot => snapshot.MinuteOfHour),
+        new("DayOfWeek", snapshot => snapshot.DayOfWeek),
+        new("IsHoliday", snapshot => snapshot.IsHoliday ? 1f : 0f),
+        new("HourSin", snapshot => (float)snapshot.HourSin),
+        new("HourCos", snapshot => (float)snapshot.HourCos),
+        new("WeekdaySin", snapshot => (float)snapshot.WeekdaySin),
+        new("WeekdayCos", snapshot => (float)snapshot.WeekdayCos),
+        new("TargetLag192", snapshot => (float)snapshot.TargetLag192),
+        new("TargetLag672", snapshot => (float)snapshot.TargetLag672),
+        new("TargetLag192Mean16", snapshot => (float)snapshot.TargetLag192Mean16),
+        new("TargetLag192Std16", snapshot => (float)snapshot.TargetLag192Std16),
+        new("TargetLag192Mean96", snapshot => (float)snapshot.TargetLag192Mean96),
+        new("TargetLag192Std96", snapshot => (float)snapshot.TargetLag192Std96),
+        new("TargetLag672Mean16", snapshot => (float)snapshot.TargetLag672Mean16),
+        new("TargetLag672Std16", snapshot => (float)snapshot.TargetLag672Std16),
+        new("TargetLag672Mean96", snapshot => (float)snapshot.TargetLag672Mean96),
+        new("TargetLag672Std96", snapshot => (float)snapshot.TargetLag672Std96)
     ];
+
+    /// <summary>Feature names in the same index order as <see cref="ToFeatureVector"/>.</summary>
+    public static readonly string[] FeatureNames = FeatureDefinitions.Select(feature => feature.Name).ToArray();
+
+    static Part3Modeling()
+    {
+        if (FeatureDefinitions.Length != FeatureCount)
+        {
+            throw new InvalidOperationException($"Feature definition count mismatch. Expected {FeatureCount}, got {FeatureDefinitions.Length}.");
+        }
+    }
 
     private sealed record SeasonalKey(int DayOfWeek, int HourOfDay, int MinuteOfHour);
 
@@ -105,7 +149,7 @@ public static class Part3Modeling
 
     private sealed class OneStepTrainingRow
     {
-        [VectorType(18)]
+        [VectorType(FeatureCount)]
         public float[] Features { get; set; } = [];
 
         public float Label { get; set; }
@@ -224,9 +268,9 @@ public static class Part3Modeling
             }
 
             var parts = line.Split(';');
-            if (parts.Length < 20 + PipelineConstants.HorizonSteps)
+            if (parts.Length < 24 + PipelineConstants.HorizonSteps)
             {
-                throw new FormatException($"Invalid row at line {lineNumber}: expected at least {20 + PipelineConstants.HorizonSteps} columns.");
+                throw new FormatException($"Invalid row at line {lineNumber}: expected at least {24 + PipelineConstants.HorizonSteps} columns.");
             }
 
             if (!DateTime.TryParseExact(
@@ -242,7 +286,7 @@ public static class Part3Modeling
             var horizonTargets = new double[PipelineConstants.HorizonSteps];
             for (var step = 0; step < PipelineConstants.HorizonSteps; step++)
             {
-                horizonTargets[step] = ParseRequiredDouble(parts[20 + step], lineNumber, $"Target_tPlus{step + 1}");
+                horizonTargets[step] = ParseRequiredDouble(parts[24 + step], lineNumber, $"Target_tPlus{step + 1}");
             }
 
             rows.Add(new Part3InputRow(
@@ -261,11 +305,15 @@ public static class Part3Modeling
                 ParseRequiredDouble(parts[12], lineNumber, nameof(Part3InputRow.WeekdayCos)),
                 ParseRequiredDouble(parts[13], lineNumber, nameof(Part3InputRow.TargetLag192)),
                 ParseRequiredDouble(parts[14], lineNumber, nameof(Part3InputRow.TargetLag672)),
-                ParseRequiredDouble(parts[15], lineNumber, nameof(Part3InputRow.TargetMean16)),
-                ParseRequiredDouble(parts[16], lineNumber, nameof(Part3InputRow.TargetStd16)),
-                ParseRequiredDouble(parts[17], lineNumber, nameof(Part3InputRow.TargetMean96)),
-                ParseRequiredDouble(parts[18], lineNumber, nameof(Part3InputRow.TargetStd96)),
-                parts[19],
+                ParseRequiredDouble(parts[15], lineNumber, nameof(Part3InputRow.TargetLag192Mean16)),
+                ParseRequiredDouble(parts[16], lineNumber, nameof(Part3InputRow.TargetLag192Std16)),
+                ParseRequiredDouble(parts[17], lineNumber, nameof(Part3InputRow.TargetLag192Mean96)),
+                ParseRequiredDouble(parts[18], lineNumber, nameof(Part3InputRow.TargetLag192Std96)),
+                ParseRequiredDouble(parts[19], lineNumber, nameof(Part3InputRow.TargetLag672Mean16)),
+                ParseRequiredDouble(parts[20], lineNumber, nameof(Part3InputRow.TargetLag672Std16)),
+                ParseRequiredDouble(parts[21], lineNumber, nameof(Part3InputRow.TargetLag672Mean96)),
+                ParseRequiredDouble(parts[22], lineNumber, nameof(Part3InputRow.TargetLag672Std96)),
+                parts[23],
                 horizonTargets));
         }
 
@@ -579,8 +627,26 @@ public static class Part3Modeling
         // Working timeline for this anchor: start with known past, then append each new prediction so later steps can use it as history.
         var history = new RecursiveHistoryState(model.HistoryTimestamps, model.HistoryValues, baseEndIndex);
 
-        var rolling16 = InitializeRollingWindow(history, anchor.AnchorUtcTime, FeatureConfig.RollingWindow16, anchor.TargetMean16);
-        var rolling96 = InitializeRollingWindow(history, anchor.AnchorUtcTime, FeatureConfig.RollingWindow96, anchor.TargetMean96);
+        var rolling16Lag192 = InitializeRollingWindow(
+            history,
+            anchor.AnchorUtcTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep),
+            FeatureConfig.RollingWindow16,
+            anchor.TargetLag192Mean16);
+        var rolling96Lag192 = InitializeRollingWindow(
+            history,
+            anchor.AnchorUtcTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep),
+            FeatureConfig.RollingWindow96,
+            anchor.TargetLag192Mean96);
+        var rolling16Lag672 = InitializeRollingWindow(
+            history,
+            anchor.AnchorUtcTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep),
+            FeatureConfig.RollingWindow16,
+            anchor.TargetLag672Mean16);
+        var rolling96Lag672 = InitializeRollingWindow(
+            history,
+            anchor.AnchorUtcTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep),
+            FeatureConfig.RollingWindow96,
+            anchor.TargetLag672Mean96);
 
         var lastTemperature = anchor.Temperature;
         var lastWindspeed = anchor.Windspeed;
@@ -606,19 +672,25 @@ public static class Part3Modeling
 
             var targetAtT = history.GetValueAtOrBefore(currentTime, anchor.TargetAtT);
 
-            if (step > 1)
-            {
-                // Incremental O(1) update: advance rolling windows with the latest target instead of rebuilding 16/96-step histories each step.
-                rolling16.Push(targetAtT);
-                rolling96.Push(targetAtT);
-            }
-
             var lag192 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep), anchor.TargetLag192);
             var lag672 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep), anchor.TargetLag672);
-            var mean16 = rolling16.Mean;
-            var std16 = rolling16.Std;
-            var mean96 = rolling96.Mean;
-            var std96 = rolling96.Std;
+            if (step > 1)
+            {
+                // Keep rolling windows aligned with their lagged timelines (t-192 and t-672).
+                rolling16Lag192.Push(lag192);
+                rolling96Lag192.Push(lag192);
+                rolling16Lag672.Push(lag672);
+                rolling96Lag672.Push(lag672);
+            }
+
+            var mean16 = rolling16Lag192.Mean;
+            var std16 = rolling16Lag192.Std;
+            var mean96 = rolling96Lag192.Mean;
+            var std96 = rolling96Lag192.Std;
+            var mean16Lag672 = rolling16Lag672.Mean;
+            var std16Lag672 = rolling16Lag672.Std;
+            var mean96Lag672 = rolling96Lag672.Mean;
+            var std96Lag672 = rolling96Lag672.Std;
 
             var hour = currentTime.Hour;
             var minute = currentTime.Minute;
@@ -632,27 +704,29 @@ public static class Part3Modeling
             var weekdayCos = Math.Cos(weekdayAngle);
             var isHoliday = hasContext && contextRow!.IsHoliday;
 
-            var features = new float[]
-            {
-                (float)targetAtT,
-                (float)temperature,
-                (float)windspeed,
-                (float)solar,
+            var features = ToFeatureVector(new FeatureSnapshot(
+                targetAtT,
+                temperature,
+                windspeed,
+                solar,
                 hour,
                 minute,
                 dayOfWeek,
-                isHoliday ? 1f : 0f,
-                (float)hourSin,
-                (float)hourCos,
-                (float)weekdaySin,
-                (float)weekdayCos,
-                (float)lag192,
-                (float)lag672,
-                (float)mean16,
-                (float)std16,
-                (float)mean96,
-                (float)std96
-            };
+                isHoliday,
+                hourSin,
+                hourCos,
+                weekdaySin,
+                weekdayCos,
+                lag192,
+                lag672,
+                mean16,
+                std16,
+                mean96,
+                std96,
+                mean16Lag672,
+                std16Lag672,
+                mean96Lag672,
+                std96Lag672));
 
             var score = model.PredictionEngine.Predict(new OneStepTrainingRow { Features = features }).Score;
             var predicted = double.IsFinite(score) ? score : targetAtT;
@@ -727,27 +801,40 @@ public static class Part3Modeling
 
     private static float[] ToFeatureVector(Part3InputRow row)
     {
-        return
-        [
-            (float)row.TargetAtT,
-            (float)row.Temperature,
-            (float)row.Windspeed,
-            (float)row.SolarIrradiation,
+        return ToFeatureVector(new FeatureSnapshot(
+            row.TargetAtT,
+            row.Temperature,
+            row.Windspeed,
+            row.SolarIrradiation,
             row.HourOfDay,
             row.MinuteOfHour,
             row.DayOfWeek,
-            row.IsHoliday ? 1f : 0f,
-            (float)row.HourSin,
-            (float)row.HourCos,
-            (float)row.WeekdaySin,
-            (float)row.WeekdayCos,
-            (float)row.TargetLag192,
-            (float)row.TargetLag672,
-            (float)row.TargetMean16,
-            (float)row.TargetStd16,
-            (float)row.TargetMean96,
-            (float)row.TargetStd96
-        ];
+            row.IsHoliday,
+            row.HourSin,
+            row.HourCos,
+            row.WeekdaySin,
+            row.WeekdayCos,
+            row.TargetLag192,
+            row.TargetLag672,
+            row.TargetLag192Mean16,
+            row.TargetLag192Std16,
+            row.TargetLag192Mean96,
+            row.TargetLag192Std96,
+            row.TargetLag672Mean16,
+            row.TargetLag672Std16,
+            row.TargetLag672Mean96,
+            row.TargetLag672Std96));
+    }
+
+    private static float[] ToFeatureVector(FeatureSnapshot snapshot)
+    {
+        var values = new float[FeatureDefinitions.Length];
+        for (var index = 0; index < FeatureDefinitions.Length; index++)
+        {
+            values[index] = FeatureDefinitions[index].Selector(snapshot);
+        }
+
+        return values;
     }
 
     private static double ParseRequiredDouble(string value, int lineNumber, string columnName)

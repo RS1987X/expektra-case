@@ -328,10 +328,14 @@ public class PartDiagnosticsTests
             "WeekdayCos",
             "TargetLag192",
             "TargetLag672",
-            "TargetMean16",
-            "TargetStd16",
-            "TargetMean96",
-            "TargetStd96",
+            "TargetLag192Mean16",
+            "TargetLag192Std16",
+            "TargetLag192Mean96",
+            "TargetLag192Std96",
+            "TargetLag672Mean16",
+            "TargetLag672Std16",
+            "TargetLag672Mean96",
+            "TargetLag672Std96",
             "Split"
         };
 
@@ -371,6 +375,10 @@ public class PartDiagnosticsTests
             "0.1",
             "10",
             "0.2",
+            "8",
+            "0.3",
+            "7",
+            "0.4",
             split
         };
 
