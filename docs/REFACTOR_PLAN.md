@@ -95,6 +95,23 @@ This minimizes conflict risk and makes reviews behavior-focused.
   - domain logic and transformations.
   - artifact serialization already encapsulated in each module.
 
+### Inter-part handoff policy (CSV artifacts)
+
+- Phase 1 keeps the current artifact-oriented handoff model intact (file-based CSV handoffs between parts).
+- In `all` mode, orchestration must continue this explicit chain:
+  - Part1 writes `part1_feature_matrix.csv`.
+  - Part2 reads `part1_feature_matrix.csv`, writes `part2_supervised_matrix.csv`.
+  - Part3 reads `part2_supervised_matrix.csv`, writes `part3_predictions.csv`.
+  - Part4 reads `part2_supervised_matrix.csv` + `part3_predictions.csv`.
+  - Diagnostics reads `part2_supervised_matrix.csv` + `part3_predictions.csv` (+ optional PFI CSV).
+- `PipelineRunner` must treat these handoffs as explicit contracts by validating file existence at each required read boundary.
+- Do not introduce in-memory handoff shortcuts in Phase 1.
+
+### Planned evolution for handoffs (deferred)
+
+- A future phase may add in-memory overloads for the `all` path to reduce repeated CSV parse/write round-trips.
+- Any future optimization must preserve artifact emission and backward-compatible CLI behavior.
+
 ### Error-handling parity rules
 
 - Preserve existing missing-file behavior: report the missing path and exit without unhandled exceptions.
@@ -116,6 +133,7 @@ This minimizes conflict risk and makes reviews behavior-focused.
 - No model abstraction (`IForecastingModel`) in Phase 1.
 - No feature-schema redesign in Phase 1.
 - No artifact CSV/header/order changes in Phase 1.
+- No replacement of CSV handoffs with in-memory pipelines in Phase 1.
 - No DI container or broad infra rewiring in Phase 1.
 
 ### Acceptance test matrix for Phase 1
@@ -123,6 +141,7 @@ This minimizes conflict risk and makes reviews behavior-focused.
 - `all` mode:
   - succeeds with valid inputs.
   - writes Part1/Part2/Part3/Part4/diagnostics artifacts.
+  - preserves CSV handoff chain and expected cross-part input/output paths.
   - emits expected completion markers.
 - `part1` mode:
   - fails gracefully when data/holidays path is missing.
@@ -153,6 +172,53 @@ This minimizes conflict risk and makes reviews behavior-focused.
 
 - `Program.cs` becomes a thin dispatcher.
 - All modes execute exactly as before.
+
+## Phase 1.b: Hybrid Handoff Optimization (In-Memory + Artifacts)
+
+### Why this phase
+
+- Pure CSV handoffs are traceable but add repeated parse/write overhead and schema-coupling pressure.
+- We want to keep auditability while improving orchestration efficiency and extensibility.
+
+### Scope
+
+- Add in-memory handoff path for `all` mode orchestration only.
+- Keep artifact emission (`part1_feature_matrix.csv`, `part2_supervised_matrix.csv`, `part3_predictions.csv`, diagnostics/Part4 artifacts) for traceability.
+- Keep standalone file-based modes (`part1`, `part2`, `part3`, `part4`, `diagnostics`) fully functional and backward compatible.
+- Ensure both file-based and in-memory orchestration paths call the same domain transformation logic.
+
+### Design constraints
+
+- No duplicated business logic between in-memory and file-based paths.
+- In-memory path may bypass intermediate re-read steps in `all` mode, but must still write artifacts.
+- CSV schemas and artifact naming remain unchanged in this phase.
+
+### Non-goals
+
+- No artifact format/version change.
+- No removal of file-based CLI modes.
+- No model abstraction redesign in this phase (handled by Phase 2).
+
+### Acceptance criteria
+
+- `all` mode:
+  - executes with in-memory inter-part handoff where available,
+  - still writes the same artifact set,
+  - produces equivalent key outputs/metrics to baseline within deterministic tolerance.
+- `part1`..`diagnostics` modes:
+  - behavior and outputs remain backward compatible.
+- Characterization tests for artifact headers/contracts remain green.
+
+### Verification additions
+
+- Compare baseline `all` output vs hybrid handoff output for:
+  - row counts in Part1/Part2/Part3 artifacts,
+  - model metrics in Part4,
+  - diagnostics summary shape.
+- Run:
+  - `dotnet build ExpekraCase.sln`
+  - `dotnet test ExpekraCase.sln`
+  - `dotnet test ExpekraCase.sln --collect:"XPlat Code Coverage"`
 
 ## Phase 2: Model Plug-in Seam
 
