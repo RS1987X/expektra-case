@@ -393,6 +393,37 @@ public static class Part3Modeling
         return rows;
     }
 
+    public static IReadOnlyList<Part3InputRow> FromPart2DatasetRows(IReadOnlyList<Part2SupervisedRow> rows)
+    {
+        return rows.Select(row => new Part3InputRow(
+                row.AnchorUtcTime,
+                row.TargetAtT,
+                row.Temperature,
+                row.Windspeed,
+                row.SolarIrradiation,
+                row.HourOfDay,
+                row.MinuteOfHour,
+                row.DayOfWeek,
+                row.IsHoliday,
+                row.HourSin,
+                row.HourCos,
+                row.WeekdaySin,
+                row.WeekdayCos,
+                row.TargetLag192,
+                row.TargetLag672,
+                row.TargetLag192Mean16,
+                row.TargetLag192Std16,
+                row.TargetLag192Mean96,
+                row.TargetLag192Std96,
+                row.TargetLag672Mean16,
+                row.TargetLag672Std16,
+                row.TargetLag672Mean96,
+                row.TargetLag672Std96,
+                row.Split,
+                row.HorizonTargets.ToArray()))
+            .ToList();
+    }
+
     public static Part3RunResult RunModels(
         IReadOnlyList<Part3InputRow> rows,
         FastTreeOptions? fastTreeOptions = null,
@@ -504,6 +535,75 @@ public static class Part3Modeling
             var actual = forecast.ActualTargets.Select(value => value.ToString(InvariantCulture));
             writer.WriteLine(string.Join(';', prefix.Concat(predicted).Concat(actual)));
         }
+    }
+
+    public static IReadOnlyList<Part3ForecastRow> ReadForecastsCsv(string forecastsCsvPath)
+    {
+        var rows = new List<Part3ForecastRow>();
+        using var reader = new StreamReader(forecastsCsvPath);
+
+        var header = reader.ReadLine();
+        if (string.IsNullOrWhiteSpace(header))
+        {
+            return rows;
+        }
+
+        var columns = header.Split(';');
+        var anchorIndex = FindRequiredIndex(columns, "anchorUtcTime");
+        var splitIndex = FindRequiredIndex(columns, "Split");
+        var modelIndex = FindRequiredIndex(columns, "Model");
+        var fallbackIndex = FindRequiredIndex(columns, "ExogenousFallbackSteps");
+        var predictedIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
+            .Select(step => FindRequiredIndex(columns, $"Pred_tPlus{step}"))
+            .ToArray();
+        var actualIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
+            .Select(step => FindRequiredIndex(columns, $"Actual_tPlus{step}"))
+            .ToArray();
+
+        string? line;
+        var lineNumber = 1;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            lineNumber++;
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            var parts = line.Split(';');
+            if (parts.Length < columns.Length)
+            {
+                throw new FormatException($"Invalid forecast row at line {lineNumber}: expected {columns.Length} columns.");
+            }
+
+            if (!DateTime.TryParseExact(
+                    parts[anchorIndex],
+                    "yyyy-MM-dd HH:mm:ss",
+                    InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out var anchorUtcTime))
+            {
+                throw new FormatException($"Invalid anchorUtcTime at line {lineNumber}: '{parts[anchorIndex]}'.");
+            }
+
+            var predicted = new double[PipelineConstants.HorizonSteps];
+            var actual = new double[PipelineConstants.HorizonSteps];
+            for (var step = 0; step < PipelineConstants.HorizonSteps; step++)
+            {
+                predicted[step] = ParseRequiredDouble(parts[predictedIndexes[step]], lineNumber, $"Pred_tPlus{step + 1}");
+                actual[step] = ParseRequiredDouble(parts[actualIndexes[step]], lineNumber, $"Actual_tPlus{step + 1}");
+            }
+
+            rows.Add(new Part3ForecastRow(
+                anchorUtcTime,
+                parts[splitIndex],
+                parts[modelIndex],
+                ParseRequiredInt(parts[fallbackIndex], lineNumber, "ExogenousFallbackSteps"),
+                predicted,
+                actual));
+        }
+
+        return rows;
     }
 
     public static void WriteSummaryJson(Part3RunSummary summary, string outputJsonPath)
@@ -903,5 +1003,18 @@ public static class Part3Modeling
         }
 
         return parsed;
+    }
+
+    private static int FindRequiredIndex(IReadOnlyList<string> columns, string name)
+    {
+        for (var index = 0; index < columns.Count; index++)
+        {
+            if (string.Equals(columns[index], name, StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+
+        throw new FormatException($"Missing required column '{name}' in forecasts CSV.");
     }
 }

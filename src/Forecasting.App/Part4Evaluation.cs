@@ -37,20 +37,36 @@ public static class Part4Evaluation
     public static Part4RunResult RunEvaluation(string part2InputCsvPath, string part3PredictionsCsvPath)
     {
         var part2Rows = Part3Modeling.ReadPart2DatasetCsv(part2InputCsvPath);
+        var predictionPoints = ReadPredictionPoints(part3PredictionsCsvPath);
+        return RunEvaluation(part2Rows, predictionPoints);
+    }
+
+    public static Part4RunResult RunEvaluation(
+        IReadOnlyList<Part3InputRow> part2Rows,
+        IReadOnlyList<Part3ForecastRow> forecastRows)
+    {
+        var predictionPoints = BuildPredictionPoints(forecastRows);
+        return RunEvaluation(part2Rows, predictionPoints);
+    }
+
+    private static Part4RunResult RunEvaluation(
+        IReadOnlyList<Part3InputRow> part2Rows,
+        IReadOnlyList<PredictionPoint> predictionPoints)
+    {
         var actualPoints = BuildValidationActualPoints(part2Rows);
         var actualLookup = BuildActualLookup(actualPoints);
 
-        var predictionPoints = ReadPredictionPoints(part3PredictionsCsvPath)
+        var validationPredictionPoints = predictionPoints
             .Where(point => string.Equals(point.Split, "Validation", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        var metrics = ComputeMetrics(predictionPoints, actualLookup);
-        var sample = BuildDeterministicSample(predictionPoints, actualLookup);
+        var metrics = ComputeMetrics(validationPredictionPoints, actualLookup);
+        var sample = BuildDeterministicSample(validationPredictionPoints, actualLookup);
 
         return new Part4RunResult(
             DateTime.UtcNow,
             actualPoints.Count,
-            predictionPoints.Count,
+            validationPredictionPoints.Count,
             metrics,
             sample);
     }
@@ -303,6 +319,36 @@ public static class Part4Evaluation
                 }
 
                 points.Add(new PredictionPoint(modelName, anchorUtcTime, step, predicted, split));
+            }
+        }
+
+        return points;
+    }
+
+    private static List<PredictionPoint> BuildPredictionPoints(IReadOnlyList<Part3ForecastRow> forecastRows)
+    {
+        var points = new List<PredictionPoint>();
+        var seenKeys = new HashSet<(string ModelName, DateTime AnchorUtcTime, int HorizonStep)>();
+
+        foreach (var row in forecastRows)
+        {
+            if (row.PredictedTargets.Count < PipelineConstants.HorizonSteps)
+            {
+                throw new FormatException(
+                    $"Invalid in-memory forecast row for model '{row.ModelName}' at anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}': expected {PipelineConstants.HorizonSteps} predicted targets.");
+            }
+
+            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
+            {
+                var predicted = row.PredictedTargets[step - 1];
+                var key = (row.ModelName, row.AnchorUtcTime, step);
+                if (!seenKeys.Add(key))
+                {
+                    throw new InvalidOperationException(
+                        $"Duplicate prediction key for model '{row.ModelName}', anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}', horizon '{step}'.");
+                }
+
+                points.Add(new PredictionPoint(row.ModelName, row.AnchorUtcTime, step, predicted, row.Split));
             }
         }
 

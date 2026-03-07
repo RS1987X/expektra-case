@@ -145,12 +145,35 @@ public static class PartDiagnostics
     public static DiagnosticsRunResult RunDiagnostics(string part2InputCsvPath, string part3PredictionsCsvPath, string? pfiCsvPath)
     {
         var rows = Part3Modeling.ReadPart2DatasetCsv(part2InputCsvPath);
+        var predictions = ReadPredictionPoints(part3PredictionsCsvPath);
+
+        IReadOnlyList<Part3PfiFeatureResult>? featureImportance = null;
+        if (!string.IsNullOrWhiteSpace(pfiCsvPath) && File.Exists(pfiCsvPath))
+        {
+            featureImportance = ReadFeatureImportanceCsv(pfiCsvPath);
+        }
+
+        return RunDiagnostics(rows, predictions, featureImportance);
+    }
+
+    public static DiagnosticsRunResult RunDiagnostics(
+        IReadOnlyList<Part3InputRow> rows,
+        IReadOnlyList<Part3ForecastRow> forecastRows,
+        IReadOnlyList<Part3PfiFeatureResult>? featureImportance = null)
+    {
+        var predictions = BuildPredictionPoints(forecastRows);
+        return RunDiagnostics(rows, predictions, featureImportance);
+    }
+
+    private static DiagnosticsRunResult RunDiagnostics(
+        IReadOnlyList<Part3InputRow> rows,
+        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyList<Part3PfiFeatureResult>? featureImportance)
+    {
         var preModel = BuildPreModelSummaries(rows);
         var cadence = BuildCadenceSummaries(rows);
 
         var actualLookup = BuildActualLookup(rows);
-        var predictions = ReadPredictionPoints(part3PredictionsCsvPath)
-            .ToList();
 
         var residualSummaries = BuildResidualSummaries(predictions, actualLookup);
         var bucketSummaries = BuildHorizonBucketSummaries(predictions, actualLookup);
@@ -161,12 +184,6 @@ public static class PartDiagnostics
             .OrderBy(row => row.AnchorUtcTime)
             .Select(row => new DiagnosticsTargetPoint(row.AnchorUtcTime, NormalizeSplit(row.Split), row.TargetAtT))
             .ToList();
-
-        IReadOnlyList<Part3PfiFeatureResult>? featureImportance = null;
-        if (!string.IsNullOrWhiteSpace(pfiCsvPath) && File.Exists(pfiCsvPath))
-        {
-            featureImportance = ReadFeatureImportanceCsv(pfiCsvPath);
-        }
 
         return new DiagnosticsRunResult(
             DateTime.UtcNow,
@@ -874,6 +891,36 @@ public static class PartDiagnostics
                 }
 
                 points.Add(new PredictionPoint(modelName, anchorUtcTime, step, predicted, split));
+            }
+        }
+
+        return points;
+    }
+
+    private static List<PredictionPoint> BuildPredictionPoints(IReadOnlyList<Part3ForecastRow> forecastRows)
+    {
+        var points = new List<PredictionPoint>();
+        var seenKeys = new HashSet<(string ModelName, DateTime AnchorUtcTime, int HorizonStep)>();
+
+        foreach (var row in forecastRows)
+        {
+            if (row.PredictedTargets.Count < PipelineConstants.HorizonSteps)
+            {
+                throw new FormatException(
+                    $"Invalid in-memory forecast row for model '{row.ModelName}' at anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}': expected {PipelineConstants.HorizonSteps} predicted targets.");
+            }
+
+            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
+            {
+                var predicted = row.PredictedTargets[step - 1];
+                var key = (row.ModelName, row.AnchorUtcTime, step);
+                if (!seenKeys.Add(key))
+                {
+                    throw new InvalidOperationException(
+                        $"Duplicate prediction key for model '{row.ModelName}', anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}', horizon '{step}'.");
+                }
+
+                points.Add(new PredictionPoint(row.ModelName, row.AnchorUtcTime, step, predicted, row.Split));
             }
         }
 

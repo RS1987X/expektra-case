@@ -209,6 +209,30 @@ This minimizes conflict risk and makes reviews behavior-focused.
   - behavior and outputs remain backward compatible.
 - Characterization tests for artifact headers/contracts remain green.
 
+### Phase 1.b implementation contract (clarifications)
+
+- `all` mode handoff boundaries for in-memory optimization:
+  - Part1 output rows may be handed directly to Part2 dataset-building logic.
+  - Part2 supervised rows may be handed directly to Part3 modeling logic.
+  - Part3 forecast rows may be handed directly to Part4/Diagnostics evaluation logic.
+  - Even when handing off in memory, each stage must still emit the same artifact files currently produced in `all` mode.
+- Standalone mode behavior remains file-oriented and unchanged:
+  - `part1`, `part2`, `part3`, `part4`, and `diagnostics` continue to read/write through file contracts as they do today.
+- Equivalence/tolerance policy for baseline vs hybrid comparisons:
+  - Artifact row counts for Part1/Part2/Part3 must match exactly.
+  - Part4 metric deltas (`MAE`, `RMSE`, `MAPE`) must be within absolute tolerance `1e-9` per model row.
+  - Diagnostics summary shape and key grouping dimensions must match exactly.
+- No logic duplication rule:
+  - Hybrid and file-based orchestration paths must call the same core transformation/modeling methods.
+  - New orchestration code in this phase should focus on data flow wiring only (not re-implementing domain logic).
+- Run-manifest expectation:
+  - Keep existing manifest fields and naming.
+  - If a hybrid path flag is added later, it must be additive and backward compatible.
+- Memory lifetime/release expectation for in-memory handoffs:
+  - Keep large intermediate collections scoped to the smallest possible block.
+  - Do not retain unnecessary references after downstream handoff/write is complete.
+  - Prefer streaming/enumeration-friendly interfaces where practical, but do not change artifact contracts in this phase.
+
 ### Verification additions
 
 - Compare baseline `all` output vs hybrid handoff output for:
