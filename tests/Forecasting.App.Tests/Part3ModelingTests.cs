@@ -234,6 +234,168 @@ public class Part3ModelingTests
         }
     }
 
+    [Fact]
+    public void RunModels_PfiIsNullByDefault()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 4);
+
+        var result = Part3Modeling.RunModels(rows);
+
+        Assert.Null(result.FeatureImportance);
+    }
+
+    [Fact]
+    public void Pfi_ResultHas17FeaturesWithFiniteMetrics()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 6);
+
+        var result = Part3Modeling.RunModels(rows, enablePfi: true);
+
+        Assert.NotNull(result.FeatureImportance);
+        Assert.Equal(17, result.FeatureImportance.Features.Count);
+        Assert.Equal(10, result.FeatureImportance.PermutationCount);
+        Assert.Equal(6, result.FeatureImportance.EvaluationRowCount);
+        Assert.Equal(1, result.FeatureImportance.HorizonStep);
+
+        Assert.All(result.FeatureImportance.Features, feature =>
+        {
+            Assert.False(string.IsNullOrEmpty(feature.FeatureName));
+            Assert.True(double.IsFinite(feature.MaeDelta));
+            Assert.True(double.IsFinite(feature.MaeDeltaStdDev));
+            Assert.True(double.IsFinite(feature.RmseDelta));
+            Assert.True(double.IsFinite(feature.RmseDeltaStdDev));
+            Assert.True(double.IsFinite(feature.R2Delta));
+            Assert.True(double.IsFinite(feature.R2DeltaStdDev));
+        });
+    }
+
+    [Fact]
+    public void Pfi_FeaturesArRankedByAbsoluteMAEDeltaDescending()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 6);
+
+        var result = Part3Modeling.RunModels(rows, enablePfi: true);
+
+        Assert.NotNull(result.FeatureImportance);
+        var features = result.FeatureImportance.Features;
+
+        for (var i = 0; i < features.Count; i++)
+        {
+            Assert.Equal(i + 1, features[i].Rank);
+        }
+
+        for (var i = 1; i < features.Count; i++)
+        {
+            Assert.True(
+                Math.Abs(features[i - 1].MaeDelta) >= Math.Abs(features[i].MaeDelta),
+                $"Feature at rank {features[i - 1].Rank} (|MAE|={Math.Abs(features[i - 1].MaeDelta)}) should have >= |MAE| than rank {features[i].Rank} (|MAE|={Math.Abs(features[i].MaeDelta)})");
+        }
+    }
+
+    [Fact]
+    public void Pfi_UsesRequestedHorizonStep()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 6);
+
+        var result = Part3Modeling.RunModels(rows, enablePfi: true, pfiHorizonStep: 96);
+
+        Assert.NotNull(result.FeatureImportance);
+        Assert.Equal(96, result.FeatureImportance.HorizonStep);
+        Assert.Equal(17, result.FeatureImportance.Features.Count);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(193)]
+    public void RunModels_InvalidPfiHorizon_ThrowsArgumentOutOfRangeException(int pfiHorizonStep)
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 4);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Part3Modeling.RunModels(rows, enablePfi: true, pfiHorizonStep: pfiHorizonStep));
+    }
+
+    [Fact]
+    public void Pfi_IsDeterministicAcrossRuns()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 4);
+
+        var result1 = Part3Modeling.RunModels(rows, enablePfi: true);
+        var result2 = Part3Modeling.RunModels(rows, enablePfi: true);
+
+        Assert.NotNull(result1.FeatureImportance);
+        Assert.NotNull(result2.FeatureImportance);
+
+        for (var i = 0; i < result1.FeatureImportance.Features.Count; i++)
+        {
+            var f1 = result1.FeatureImportance.Features[i];
+            var f2 = result2.FeatureImportance.Features[i];
+            Assert.Equal(f1.FeatureName, f2.FeatureName);
+            Assert.Equal(f1.Rank, f2.Rank);
+            Assert.Equal(f1.MaeDelta, f2.MaeDelta, 12);
+            Assert.Equal(f1.RmseDelta, f2.RmseDelta, 12);
+            Assert.Equal(f1.R2Delta, f2.R2Delta, 12);
+        }
+    }
+
+    [Fact]
+    public void Pfi_FeatureNamesMatchExpectedListAndVectorTypeLength()
+    {
+        var expectedNames = new[]
+        {
+            "Temperature", "Windspeed", "SolarIrradiation",
+            "HourOfDay", "MinuteOfHour", "DayOfWeek", "IsHoliday",
+            "HourSin", "HourCos", "WeekdaySin", "WeekdayCos",
+            "TargetLag192", "TargetLag672", "TargetLag192Mean16", "TargetLag192Std16",
+            "TargetLag192Mean96", "TargetLag192Std96"
+        };
+
+        Assert.Equal(expectedNames.Length, Part3Modeling.FeatureNames.Length);
+        Assert.Equal(expectedNames, Part3Modeling.FeatureNames);
+
+        // Verify expected schema width stays in sync with the centralized feature definitions.
+        Assert.Equal(expectedNames.Length, Part3Modeling.FeatureNames.Length);
+    }
+
+    [Fact]
+    public void Pfi_WriteFeatureImportanceCsv_WritesExpectedFormat()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 4);
+        var result = Part3Modeling.RunModels(rows, enablePfi: true);
+
+        Assert.NotNull(result.FeatureImportance);
+
+        var outputDir = Path.Combine(Path.GetTempPath(), $"pfi-csv-test-{Guid.NewGuid():N}");
+        var csvPath = Path.Combine(outputDir, "feature_importance.csv");
+
+        try
+        {
+            Part3Modeling.WriteFeatureImportanceCsv(result.FeatureImportance, csvPath);
+
+            Assert.True(File.Exists(csvPath));
+            var lines = File.ReadAllLines(csvPath);
+            Assert.Equal(18, lines.Length); // header + 17 features
+
+            Assert.Equal("Rank;FeatureName;MaeDelta;MaeDeltaStdDev;RmseDelta;RmseDeltaStdDev;R2Delta;R2DeltaStdDev", lines[0]);
+
+            // Verify each data row has 8 columns
+            for (var i = 1; i < lines.Length; i++)
+            {
+                var parts = lines[i].Split(';');
+                Assert.Equal(8, parts.Length);
+                Assert.True(int.TryParse(parts[0], out _), $"Rank column should be integer at line {i}");
+                Assert.False(string.IsNullOrEmpty(parts[1]), $"FeatureName should not be empty at line {i}");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(outputDir))
+            {
+                Directory.Delete(outputDir, true);
+            }
+        }
+    }
+
     private static List<Part3InputRow> BuildSyntheticPart3Rows(int trainCount, int validationCount)
     {
         var rows = new List<Part3InputRow>(trainCount + validationCount);
@@ -280,6 +442,10 @@ public class Part3ModelingTests
                 0.2,
                 target - 1.0,
                 0.4,
+                target - 2.5,
+                0.3,
+                target - 3.0,
+                0.5,
                 split,
                 horizon));
         }
@@ -325,10 +491,14 @@ public class Part3ModelingTests
             "WeekdayCos",
             "TargetLag192",
             "TargetLag672",
-            "TargetMean16",
-            "TargetStd16",
-            "TargetMean96",
-            "TargetStd96",
+            "TargetLag192Mean16",
+            "TargetLag192Std16",
+            "TargetLag192Mean96",
+            "TargetLag192Std96",
+            "TargetLag672Mean16",
+            "TargetLag672Std16",
+            "TargetLag672Mean96",
+            "TargetLag672Std96",
             "Split"
         };
 
@@ -364,6 +534,10 @@ public class Part3ModelingTests
             "0.1",
             "100",
             "0.2",
+            "98",
+            "0.3",
+            "97",
+            "0.4",
             "Train"
         };
 

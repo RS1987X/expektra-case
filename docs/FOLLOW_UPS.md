@@ -24,6 +24,7 @@
 - DONE (2026-03-06): add targeted Part 2 tests for split-boundary behavior, including explicit train-anchor coverage and deterministic assertions around the purge zone near validation start.
 - Follow-up action: add explicit continuity validation for Part 2 input cadence (expected 15-minute step); fail fast or clearly report when timestamp gaps/irregular intervals would break index-based lag/horizon semantics.
 - Follow-up action: remove or repurpose currently unused `MinutesPerStep` constant in Part 2 implementation to keep the module intentional and warning-free.
+- Follow-up action: optimize rolling-stat feature computation for lagged targets (`TargetLag192*` and `TargetLag672*`) by replacing per-anchor full-window recomputes (mean/std rescans over 16/96 windows) with incremental rolling sums/sums-of-squares to reduce CPU cost in the Part 2 anchor loop.
 
 ## Part 3 follow-up
 
@@ -35,8 +36,11 @@
 - Follow-up action: persist Part 3 fallback telemetry in artifacts (for example non-finite score fallback to `targetAtT`, exogenous carry-forward fallback, and lag/lookup fallback counts) so users can audit how often safeguards were applied.
 - Follow-up action: split Part 3 summary fallback counters by model semantics (for example `SeasonalKeyFallbackSteps` for baseline and `ExogenousCarryForwardFallbackSteps` / `NonFiniteScoreFallbackSteps` for FastTree) instead of a shared `ExogenousFallbackSteps` label.
 - DONE (2026-03-07): persist Part 3 FastTree feature-importance scores based on out-of-sample performance (for example holdout/backtest permutation feature importance, not training-fit-only importance) to an artifact so feature influence is inspectable. Planned in `docs/CASE_EXECUTION_PLAN.md` under "Permutation Feature Importance" section.
+- Permutation importance:
+- DONE (2026-03-07): gate permutation-importance execution behind an explicit CLI flag (`--pfi`) so default runs remain fast and deterministic unless the analysis is explicitly requested.
+- DONE (2026-03-07): add optional CLI horizon selection for permutation-importance analysis via `--pfi-horizon` (1..192), so feature relevance can be inspected for specific forecast steps (for example day-ahead and two-day-ahead slices) instead of only `t+1`.
 - Follow-up action: consider streaming prediction writes for large validation sets to avoid retaining all forecast rows in memory before CSV persistence.
-- Follow-up action: persist Part 3 predictions for both `Split=Train` and `Split=Validation` so diagnostics can report in-sample vs out-of-sample errors from a single prediction artifact while keeping Part 4 metrics validation-only.
+- DONE (2026-03-07): persist Part 3 predictions for both `Split=Train` and `Split=Validation` so diagnostics can report in-sample vs out-of-sample errors from a single prediction artifact while keeping Part 4 metrics validation-only.
 
 ## Part 4 follow-up
 

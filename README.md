@@ -27,7 +27,20 @@ dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part4
 dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- diagnostics
 ```
 
+Kör Part 3 med permutation feature importance (PFI):
+
+```bash
+dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part3 --pfi
+```
+
+Valfri PFI-horisont (standard är `t+1`, tillåtet intervall `1..192`):
+
+```bash
+dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part3 --pfi --pfi-horizon 96
+```
+
 Genererade filer skrivs till `artifacts/`.
+Vid `all`- och `part3`-körningar skrivs även `run_manifest.json` med effektiva körinställningar (CLI-args, PFI-horisont, model defaults, paths och git metadata) for reproducerbarhet.
 
 ## Del 5 - Reflektion och dokumentation
 
@@ -50,9 +63,10 @@ Jag har inte kört explicit feature-importance-export i denna version, men utifr
 ### 3. Vad skulle du göra annorlunda eller lägga till med mer tid?
 - Köra tidsserie-CV med flera rullande foldar (inte bara en valideringssplit).
 - Hyperparamter-tuning for FastTree samt jämforelse mot direct multi-step strategi.
-- Lägga till feature-importance (t.ex. permutation importance) och felanalys per tid pa dygnet/sasong.
 - Hantera framtida exogena variabler mer explicit (prognoser/scenarier) i stället för fallback där data saknas.
 - Lägga till probabilistiska prognoser (prediktionsintervall), inte bara punktprognos.
+- Performance profiling
+- Implementera preprocessing och fallback lineage trace
 
 ### 4. Hur skulle du hantera konceptdrift?
 Jag skulle kombinera overvaking, snabb detektion och kontrollerad omträning:

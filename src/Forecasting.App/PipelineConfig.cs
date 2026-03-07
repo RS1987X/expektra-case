@@ -25,8 +25,8 @@ public static class FeatureConfig
 /// ML hyperparameters for the FastTree recursive model, passed as a value so callers can override defaults.
 /// </summary>
 public sealed record FastTreeOptions(
-    int NumberOfTrees = 300,
-    int NumberOfLeaves = 32,
+    int NumberOfTrees = 100,
+    int NumberOfLeaves = 24,
     int MinimumExampleCountPerLeaf = 50,
     double LearningRate = 0.05,
     int Seed = 42);

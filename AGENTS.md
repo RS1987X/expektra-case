@@ -44,6 +44,9 @@ It exists to reduce repeated mistakes by capturing project-specific rules and ve
 - If you change behavior, update docs where users/developers will look.
 - Comment non-obvious design decisions in code close to where they are applied.
 - Use `gh` CLI for creating issues and pull requests (not just markdown files).
+- Default exploration scope is `src/`, `tests/`, `docs/`, `README.md`, and solution/project/config files.
+- Do **not** read large raw data or generated artifact files by default (`data/`, `artifacts/`, `**/bin/`, `**/obj/`, `**/TestResults/`, `.git/`) unless the task explicitly requires data analysis, metric inspection, diagnostics review, artifact/schema validation, or debugging an output file.
+- When artifact inspection is required, read the smallest relevant slice first (for example headers, summaries, or a narrow sample), not entire large CSV outputs.
 
 ## Branching workflow (required)
 

@@ -7,30 +7,34 @@ public class Part2FeatureEngineeringTests
     [Fact]
     public void BuildDataset_ComputesExpectedLagsRollingAndHorizonLabels()
     {
-        var rows = BuildSyntheticFeatureRows(900);
-        var validationStartUtc = rows[700].UtcTime;
+        var rows = BuildSyntheticFeatureRows(1000);
+        var validationStartUtc = rows[767].UtcTime;
 
         var dataset = Part2FeatureEngineering.BuildDataset(rows, validationStartUtc);
 
-        Assert.Equal(8, dataset.Rows.Count);
-        Assert.Equal(36, dataset.Summary.CandidateAnchors);
-        Assert.Equal(28, dataset.Summary.PurgedAnchors);
+        Assert.Equal(41, dataset.Rows.Count);
+        Assert.Equal(41, dataset.Summary.CandidateAnchors);
+        Assert.Equal(0, dataset.Summary.PurgedAnchors);
         Assert.Equal(0, dataset.Summary.TrainAnchors);
-        Assert.Equal(8, dataset.Summary.ValidationAnchors);
+        Assert.Equal(41, dataset.Summary.ValidationAnchors);
 
         var first = dataset.Rows[0];
-        Assert.Equal(rows[700].UtcTime, first.AnchorUtcTime);
+        Assert.Equal(rows[767].UtcTime, first.AnchorUtcTime);
         Assert.Equal("Validation", first.Split);
-        Assert.Equal(508.0, first.TargetLag192);
-        Assert.Equal(28.0, first.TargetLag672);
-        Assert.Equal(692.5, first.TargetMean16, 8);
-        Assert.Equal(Math.Sqrt(21.25), first.TargetStd16, 8);
-        Assert.Equal(652.5, first.TargetMean96, 8);
-        Assert.Equal(Math.Sqrt((96d * 96d - 1d) / 12d), first.TargetStd96, 8);
+        Assert.Equal(575.0, first.TargetLag192);
+        Assert.Equal(95.0, first.TargetLag672);
+        Assert.Equal(567.5, first.TargetLag192Mean16, 8);
+        Assert.Equal(Math.Sqrt(21.25), first.TargetLag192Std16, 8);
+        Assert.Equal(527.5, first.TargetLag192Mean96, 8);
+        Assert.Equal(Math.Sqrt((96d * 96d - 1d) / 12d), first.TargetLag192Std96, 8);
+        Assert.Equal(87.5, first.TargetLag672Mean16, 8);
+        Assert.Equal(Math.Sqrt(21.25), first.TargetLag672Std16, 8);
+        Assert.Equal(47.5, first.TargetLag672Mean96, 8);
+        Assert.Equal(Math.Sqrt((96d * 96d - 1d) / 12d), first.TargetLag672Std96, 8);
 
         Assert.Equal(192, first.HorizonTargets.Count);
-        Assert.Equal(701.0, first.HorizonTargets[0]);
-        Assert.Equal(892.0, first.HorizonTargets[^1]);
+        Assert.Equal(768.0, first.HorizonTargets[0]);
+        Assert.Equal(959.0, first.HorizonTargets[^1]);
     }
 
     [Fact]
@@ -58,23 +62,23 @@ public class Part2FeatureEngineeringTests
     public void BuildDataset_SplitsIntoTrainAndValidationAndPurgesBoundaryAnchors()
     {
         var rows = BuildSyntheticFeatureRows(1200);
-        var validationStartUtc = rows[900].UtcTime;
+        var validationStartUtc = rows[1000].UtcTime;
 
         var dataset = Part2FeatureEngineering.BuildDataset(rows, validationStartUtc);
 
-        Assert.Equal(336, dataset.Summary.CandidateAnchors);
-        Assert.Equal(36, dataset.Summary.TrainAnchors);
-        Assert.Equal(108, dataset.Summary.ValidationAnchors);
+        Assert.Equal(241, dataset.Summary.CandidateAnchors);
+        Assert.Equal(41, dataset.Summary.TrainAnchors);
+        Assert.Equal(8, dataset.Summary.ValidationAnchors);
         Assert.Equal(192, dataset.Summary.PurgedAnchors);
-        Assert.Equal(144, dataset.Rows.Count);
+        Assert.Equal(49, dataset.Rows.Count);
 
         Assert.Equal("Train", dataset.Rows[0].Split);
-        Assert.Equal(rows[672].UtcTime, dataset.Rows[0].AnchorUtcTime);
-        Assert.Equal("Train", dataset.Rows[35].Split);
-        Assert.Equal(rows[707].UtcTime, dataset.Rows[35].AnchorUtcTime);
+        Assert.Equal(rows[767].UtcTime, dataset.Rows[0].AnchorUtcTime);
+        Assert.Equal("Train", dataset.Rows[40].Split);
+        Assert.Equal(rows[807].UtcTime, dataset.Rows[40].AnchorUtcTime);
 
-        Assert.Equal("Validation", dataset.Rows[36].Split);
-        Assert.Equal(rows[900].UtcTime, dataset.Rows[36].AnchorUtcTime);
+        Assert.Equal("Validation", dataset.Rows[41].Split);
+        Assert.Equal(rows[1000].UtcTime, dataset.Rows[41].AnchorUtcTime);
     }
 
     [Fact]
@@ -204,8 +208,8 @@ public class Part2FeatureEngineeringTests
     [Fact]
     public void WriteDatasetCsvAndSummaryJson_WritesArtifacts()
     {
-        var rows = BuildSyntheticFeatureRows(900);
-        var dataset = Part2FeatureEngineering.BuildDataset(rows, rows[700].UtcTime);
+        var rows = BuildSyntheticFeatureRows(1000);
+        var dataset = Part2FeatureEngineering.BuildDataset(rows, rows[767].UtcTime);
         var outputDir = Path.Combine(Path.GetTempPath(), $"part2-tests-{Guid.NewGuid():N}");
         var csvPath = Path.Combine(outputDir, "part2.csv");
         var summaryPath = Path.Combine(outputDir, "part2.summary.json");

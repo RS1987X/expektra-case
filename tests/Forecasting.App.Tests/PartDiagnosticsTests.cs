@@ -181,6 +181,118 @@ public class PartDiagnosticsTests
         }
     }
 
+    [Fact]
+    public void WriteArtifacts_WithPfiCsv_CreatesFeatureImportanceSvgAndHtmlSection()
+    {
+        var trainAnchor = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var validationAnchor = new DateTime(2024, 2, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        var part2Path = CreatePart2Csv(
+        [
+            BuildPart2Row(trainAnchor, "Train", BuildActualTargets(8d)),
+            BuildPart2Row(validationAnchor, "Validation", BuildActualTargets(10d))
+        ]);
+
+        var predictionsPath = CreatePredictionsCsv([BuildPredictionRow(validationAnchor, "Validation", "FastTreeRecursive", BuildPredictions(10d))]);
+        var pfiCsvPath = CreatePfiCsv();
+        var outputDir = Path.Combine(Path.GetTempPath(), $"diagnostics-pfi-tests-{Guid.NewGuid():N}");
+
+        try
+        {
+            var result = PartDiagnostics.RunDiagnostics(part2Path, predictionsPath, pfiCsvPath);
+            PartDiagnostics.WriteArtifacts(result, outputDir);
+
+            // Verify PFI data was loaded
+            Assert.NotNull(result.FeatureImportance);
+            Assert.Equal(3, result.FeatureImportance.Count);
+
+            // Verify SVG was created
+            Assert.True(File.Exists(Path.Combine(outputDir, "feature_importance.svg")));
+            var svg = File.ReadAllText(Path.Combine(outputDir, "feature_importance.svg"));
+            Assert.Contains("<rect", svg);
+            Assert.Contains("<svg", svg);
+            Assert.Contains("TargetAtT", svg);
+
+            // Verify HTML includes PFI section
+            var html = File.ReadAllText(Path.Combine(outputDir, "diagnostics_report.html"));
+            Assert.Contains("Feature importance (PFI)", html);
+            Assert.Contains("MAE delta", html);
+            Assert.Contains("TargetAtT", html);
+        }
+        finally
+        {
+            File.Delete(part2Path);
+            File.Delete(predictionsPath);
+            File.Delete(pfiCsvPath);
+            if (Directory.Exists(outputDir))
+            {
+                Directory.Delete(outputDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public void WriteArtifacts_WithoutPfiCsv_OmitsPfiSectionGracefully()
+    {
+        var trainAnchor = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var validationAnchor = new DateTime(2024, 2, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        var part2Path = CreatePart2Csv(
+        [
+            BuildPart2Row(trainAnchor, "Train", BuildActualTargets(8d)),
+            BuildPart2Row(validationAnchor, "Validation", BuildActualTargets(10d))
+        ]);
+
+        var predictionsPath = CreatePredictionsCsv([BuildPredictionRow(validationAnchor, "Validation", "FastTreeRecursive", BuildPredictions(10d))]);
+        var outputDir = Path.Combine(Path.GetTempPath(), $"diagnostics-nopfi-tests-{Guid.NewGuid():N}");
+
+        try
+        {
+            // Run without PFI CSV path
+            var result = PartDiagnostics.RunDiagnostics(part2Path, predictionsPath);
+            PartDiagnostics.WriteArtifacts(result, outputDir);
+
+            // Verify no PFI artifacts
+            Assert.Null(result.FeatureImportance);
+            Assert.False(File.Exists(Path.Combine(outputDir, "feature_importance.svg")));
+
+            // Verify HTML does NOT contain PFI section
+            var html = File.ReadAllText(Path.Combine(outputDir, "diagnostics_report.html"));
+            Assert.DoesNotContain("Feature importance (PFI)", html);
+        }
+        finally
+        {
+            File.Delete(part2Path);
+            File.Delete(predictionsPath);
+            if (Directory.Exists(outputDir))
+            {
+                Directory.Delete(outputDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public void ReadFeatureImportanceCsv_ParsesExpectedFormat()
+    {
+        var csvPath = CreatePfiCsv();
+
+        try
+        {
+            var features = PartDiagnostics.ReadFeatureImportanceCsv(csvPath);
+
+            Assert.Equal(3, features.Count);
+            Assert.Equal("TargetAtT", features[0].FeatureName);
+            Assert.Equal(1, features[0].Rank);
+            Assert.Equal(0.5, features[0].MaeDelta, 6);
+            Assert.Equal("Temperature", features[1].FeatureName);
+            Assert.Equal("Windspeed", features[2].FeatureName);
+        }
+        finally
+        {
+            File.Delete(csvPath);
+        }
+    }
+
     private static string CreatePart2Csv(IReadOnlyList<string> rows)
     {
         var path = Path.Combine(Path.GetTempPath(), $"diag-part2-{Guid.NewGuid():N}.csv");
@@ -216,10 +328,14 @@ public class PartDiagnosticsTests
             "WeekdayCos",
             "TargetLag192",
             "TargetLag672",
-            "TargetMean16",
-            "TargetStd16",
-            "TargetMean96",
-            "TargetStd96",
+            "TargetLag192Mean16",
+            "TargetLag192Std16",
+            "TargetLag192Mean96",
+            "TargetLag192Std96",
+            "TargetLag672Mean16",
+            "TargetLag672Std16",
+            "TargetLag672Mean96",
+            "TargetLag672Std96",
             "Split"
         };
 
@@ -259,6 +375,10 @@ public class PartDiagnosticsTests
             "0.1",
             "10",
             "0.2",
+            "8",
+            "0.3",
+            "7",
+            "0.4",
             split
         };
 
@@ -300,5 +420,19 @@ public class PartDiagnosticsTests
         }
 
         return predictions;
+    }
+
+    private static string CreatePfiCsv()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"diag-pfi-{Guid.NewGuid():N}.csv");
+        var lines = new[]
+        {
+            "Rank;FeatureName;MaeDelta;MaeDeltaStdDev;RmseDelta;RmseDeltaStdDev;R2Delta;R2DeltaStdDev",
+            "1;TargetAtT;0.5;0.01;0.6;0.02;-0.1;0.005",
+            "2;Temperature;0.3;0.008;0.4;0.015;-0.05;0.003",
+            "3;Windspeed;0.1;0.005;0.15;0.01;-0.02;0.002"
+        };
+        File.WriteAllText(path, string.Join(Environment.NewLine, lines));
+        return path;
     }
 }
