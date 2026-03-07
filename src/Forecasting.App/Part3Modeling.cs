@@ -398,9 +398,9 @@ public static class Part3Modeling
         {
             FeatureColumnName = nameof(OneStepTrainingRow.Features),
             LabelColumnName = nameof(OneStepTrainingRow.Label),
-            NumberOfTrees = 100,
-            NumberOfLeaves = 24,
-            MinimumExampleCountPerLeaf = 10,
+            NumberOfTrees = 300,
+            NumberOfLeaves = 32,
+            MinimumExampleCountPerLeaf = 50,
             LearningRate = 0.05
         });
 
