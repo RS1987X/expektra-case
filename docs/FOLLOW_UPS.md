@@ -24,6 +24,7 @@
 - DONE (2026-03-06): add targeted Part 2 tests for split-boundary behavior, including explicit train-anchor coverage and deterministic assertions around the purge zone near validation start.
 - Follow-up action: add explicit continuity validation for Part 2 input cadence (expected 15-minute step); fail fast or clearly report when timestamp gaps/irregular intervals would break index-based lag/horizon semantics.
 - Follow-up action: remove or repurpose currently unused `MinutesPerStep` constant in Part 2 implementation to keep the module intentional and warning-free.
+- Follow-up action: optimize rolling-stat feature computation for lagged targets (`TargetLag192*` and `TargetLag672*`) by replacing per-anchor full-window recomputes (mean/std rescans over 16/96 windows) with incremental rolling sums/sums-of-squares to reduce CPU cost in the Part 2 anchor loop.
 
 ## Part 3 follow-up
 

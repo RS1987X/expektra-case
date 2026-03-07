@@ -122,11 +122,7 @@ public static class Part3Modeling
         new("TargetLag192Mean16", snapshot => (float)snapshot.TargetLag192Mean16),
         new("TargetLag192Std16", snapshot => (float)snapshot.TargetLag192Std16),
         new("TargetLag192Mean96", snapshot => (float)snapshot.TargetLag192Mean96),
-        new("TargetLag192Std96", snapshot => (float)snapshot.TargetLag192Std96),
-        new("TargetLag672Mean16", snapshot => (float)snapshot.TargetLag672Mean16),
-        new("TargetLag672Std16", snapshot => (float)snapshot.TargetLag672Std16),
-        new("TargetLag672Mean96", snapshot => (float)snapshot.TargetLag672Mean96),
-        new("TargetLag672Std96", snapshot => (float)snapshot.TargetLag672Std96)
+        new("TargetLag192Std96", snapshot => (float)snapshot.TargetLag192Std96)
     ];
 
     /// <summary>Feature names in the same index order as <see cref="ToFeatureVector"/>.</summary>
@@ -713,14 +709,6 @@ public static class Part3Modeling
             anchor.AnchorUtcTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep),
             FeatureConfig.RollingWindow96,
             anchor.TargetLag192Mean96);
-        var targetLag672Rolling16 = history.InitializeRollingWindow(
-            anchor.AnchorUtcTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep),
-            FeatureConfig.RollingWindow16,
-            anchor.TargetLag672Mean16);
-        var targetLag672Rolling96 = history.InitializeRollingWindow(
-            anchor.AnchorUtcTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep),
-            FeatureConfig.RollingWindow96,
-            anchor.TargetLag672Mean96);
 
         var lastTemperature = anchor.Temperature;
         var lastWindspeed = anchor.Windspeed;
@@ -754,11 +742,9 @@ public static class Part3Modeling
             var targetLag672 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep), anchor.TargetLag672);
             if (step > 1)
             {
-                // Keep rolling windows aligned with their lagged timelines (t-192 and t-672).
+                // Keep rolling windows aligned with their lagged timeline (t-192).
                 targetLag192Rolling16.Push(targetLag192);
                 targetLag192Rolling96.Push(targetLag192);
-                targetLag672Rolling16.Push(targetLag672);
-                targetLag672Rolling96.Push(targetLag672);
             }
 
             var hour = currentTime.Hour;
@@ -784,10 +770,6 @@ public static class Part3Modeling
             features[14] = (float)targetLag192Rolling16.Std;
             features[15] = (float)targetLag192Rolling96.Mean;
             features[16] = (float)targetLag192Rolling96.Std;
-            features[17] = (float)targetLag672Rolling16.Mean;
-            features[18] = (float)targetLag672Rolling16.Std;
-            features[19] = (float)targetLag672Rolling96.Mean;
-            features[20] = (float)targetLag672Rolling96.Std;
 
             var score = model.PredictionEngine.Predict(reusableRow).Score;
             var predicted = double.IsFinite(score) ? score : targetAtT;

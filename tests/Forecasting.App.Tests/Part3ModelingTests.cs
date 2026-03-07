@@ -245,14 +245,14 @@ public class Part3ModelingTests
     }
 
     [Fact]
-    public void Pfi_ResultHas21FeaturesWithFiniteMetrics()
+    public void Pfi_ResultHas17FeaturesWithFiniteMetrics()
     {
         var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 6);
 
         var result = Part3Modeling.RunModels(rows, enablePfi: true);
 
         Assert.NotNull(result.FeatureImportance);
-        Assert.Equal(21, result.FeatureImportance.Features.Count);
+        Assert.Equal(17, result.FeatureImportance.Features.Count);
         Assert.Equal(10, result.FeatureImportance.PermutationCount);
         Assert.Equal(6, result.FeatureImportance.EvaluationRowCount);
 
@@ -323,8 +323,7 @@ public class Part3ModelingTests
             "HourOfDay", "MinuteOfHour", "DayOfWeek", "IsHoliday",
             "HourSin", "HourCos", "WeekdaySin", "WeekdayCos",
             "TargetLag192", "TargetLag672", "TargetLag192Mean16", "TargetLag192Std16",
-            "TargetLag192Mean96", "TargetLag192Std96",
-            "TargetLag672Mean16", "TargetLag672Std16", "TargetLag672Mean96", "TargetLag672Std96"
+            "TargetLag192Mean96", "TargetLag192Std96"
         };
 
         Assert.Equal(expectedNames.Length, Part3Modeling.FeatureNames.Length);
@@ -351,7 +350,7 @@ public class Part3ModelingTests
 
             Assert.True(File.Exists(csvPath));
             var lines = File.ReadAllLines(csvPath);
-            Assert.Equal(22, lines.Length); // header + 21 features
+            Assert.Equal(18, lines.Length); // header + 17 features
 
             Assert.Equal("Rank;FeatureName;MaeDelta;MaeDeltaStdDev;RmseDelta;RmseDeltaStdDev;R2Delta;R2DeltaStdDev", lines[0]);
 
