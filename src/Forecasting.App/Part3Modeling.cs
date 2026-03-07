@@ -260,24 +260,22 @@ public static class Part3Modeling
 
     /// <summary>
     /// Maintains a view of history truncated at the anchor time, plus predicted values appended
-    /// during recursive inference. The constructor physically slices the base arrays so that
-    /// future actual targets are never accessible — preventing accidental leakage even if new
-    /// code is added that indexes into the arrays without a length guard.
+    /// during recursive inference. Base arrays are shared and access is constrained by
+    /// <c>_baseLength</c> so reads cannot cross the anchor boundary.
     /// </summary>
     private sealed class RecursiveHistoryState
     {
         private readonly DateTime[] _baseTimestamps;
         private readonly double[] _baseValues;
+        private readonly int _baseLength;
         private readonly List<DateTime> _predictedTimestamps = new(PipelineConstants.HorizonSteps);
         private readonly List<double> _predictedValues = new(PipelineConstants.HorizonSteps);
 
         public RecursiveHistoryState(DateTime[] baseTimestamps, double[] baseValues, int baseEndIndex)
         {
-            // Physically slice so that _baseTimestamps/Values.Length == usable length.
-            // This makes it structurally impossible to read actual targets past the anchor.
-            var length = Math.Max(0, baseEndIndex + 1);
-            _baseTimestamps = baseTimestamps.AsSpan(0, length).ToArray();
-            _baseValues = baseValues.AsSpan(0, length).ToArray();
+            _baseTimestamps = baseTimestamps;
+            _baseValues = baseValues;
+            _baseLength = Math.Max(0, baseEndIndex + 1);
         }
 
         public double GetValueAtOrBefore(DateTime timestamp, double fallback)
@@ -288,7 +286,7 @@ public static class Part3Modeling
                 return _predictedValues[predictedIndex];
             }
 
-            var baseIndex = UpperBound(_baseTimestamps, _baseTimestamps.Length, timestamp) - 1;
+            var baseIndex = UpperBound(_baseTimestamps, _baseLength, timestamp) - 1;
             return baseIndex >= 0 ? _baseValues[baseIndex] : fallback;
         }
 
@@ -308,7 +306,7 @@ public static class Part3Modeling
             var window = new RollingWindowStats(windowSteps);
 
             // Find the base index for the end timestamp (rightmost position ≤ endTimestamp).
-            var endIndex = UpperBound(_baseTimestamps, _baseTimestamps.Length, endTimestamp) - 1;
+            var endIndex = UpperBound(_baseTimestamps, _baseLength, endTimestamp) - 1;
 
             // Walk backwards from endIndex to fill the window oldest-first.
             // Offset 0 = oldest slot, offset (windowSteps-1) = newest slot (at endTimestamp).
