@@ -44,9 +44,6 @@ public sealed record Part2Dataset(
 
 public static class Part2FeatureEngineering
 {
-    private const int MinutesPerStep = 15;
-    private const int ValidationWindowDays = 30;
-    private const int HorizonSteps = 192;
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
 
     public static IReadOnlyList<FeatureRow> ReadFeatureMatrixCsv(string featureMatrixCsvPath)
@@ -108,25 +105,25 @@ public static class Part2FeatureEngineering
 
         if (sorted.Count == 0)
         {
-            return new Part2Dataset([], new Part2DatasetSummary(DateTime.MinValue, HorizonSteps, 0, 0, 0, 0, 0, 0, 0, 0));
+            return new Part2Dataset([], new Part2DatasetSummary(DateTime.MinValue, PipelineConstants.HorizonSteps, 0, 0, 0, 0, 0, 0, 0, 0));
         }
 
-        var effectiveValidationStart = validationStartUtc ?? sorted[^1].UtcTime.AddDays(-ValidationWindowDays);
+        var effectiveValidationStart = validationStartUtc ?? sorted[^1].UtcTime.AddDays(-PipelineConstants.DefaultValidationWindowDays);
 
-        const int lag192 = 192;
-        const int lag672 = 672;
-        const int window16 = 16;
-        const int window96 = 96;
+        const int lag192 = FeatureConfig.TargetLagShort;
+        const int lag672 = FeatureConfig.TargetLagLong;
+        const int window16 = FeatureConfig.RollingWindowShort;
+        const int window96 = FeatureConfig.RollingWindowLong;
         // This gate only ensures enough history exists to compute lag/rolling features.
         // Split safety/leakage control is handled later by horizon-based train/validation eligibility and purge.
         var maxLookback = new[] { lag192, lag672, window16, window96 }.Max();
 
-        var lastAnchorIndex = sorted.Count - 1 - HorizonSteps;
+        var lastAnchorIndex = sorted.Count - 1 - PipelineConstants.HorizonSteps;
         if (lastAnchorIndex < maxLookback)
         {
             return new Part2Dataset([], new Part2DatasetSummary(
                 effectiveValidationStart,
-                HorizonSteps,
+                PipelineConstants.HorizonSteps,
                 inputRowsBeforeDeduplication,
                 sorted.Count,
                 droppedDuplicateTimestampRows,
@@ -148,7 +145,7 @@ public static class Part2FeatureEngineering
             candidateAnchors++;
 
             var anchor = sorted[anchorIndex];
-            var horizonEndUtc = sorted[anchorIndex + HorizonSteps].UtcTime;
+            var horizonEndUtc = sorted[anchorIndex + PipelineConstants.HorizonSteps].UtcTime;
             // Non-obvious but intentional: each anchor at time t maps to one full label vector
             // y(t+1..t+H), so split eligibility must consider horizon end, not anchor time alone.
             var isTrain = horizonEndUtc < effectiveValidationStart;
@@ -169,8 +166,8 @@ public static class Part2FeatureEngineering
             var mean96 = CalculateMean(sorted, anchorIndex - (window96 - 1), anchorIndex);
             var std96 = CalculatePopulationStd(sorted, anchorIndex - (window96 - 1), anchorIndex, mean96);
 
-            var horizonTargets = new double[HorizonSteps];
-            for (var step = 1; step <= HorizonSteps; step++)
+            var horizonTargets = new double[PipelineConstants.HorizonSteps];
+            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
                 horizonTargets[step - 1] = sorted[anchorIndex + step].Target;
             }
@@ -211,7 +208,7 @@ public static class Part2FeatureEngineering
 
         var summary = new Part2DatasetSummary(
             effectiveValidationStart,
-            HorizonSteps,
+            PipelineConstants.HorizonSteps,
             inputRowsBeforeDeduplication,
             sorted.Count,
             droppedDuplicateTimestampRows,
@@ -233,7 +230,7 @@ public static class Part2FeatureEngineering
         }
 
         using var writer = new StreamWriter(outputCsvPath, false);
-        var horizonColumns = Enumerable.Range(1, HorizonSteps).Select(step => $"Target_tPlus{step}");
+        var horizonColumns = Enumerable.Range(1, PipelineConstants.HorizonSteps).Select(step => $"Target_tPlus{step}");
         writer.WriteLine(string.Join(';',
             new[]
             {

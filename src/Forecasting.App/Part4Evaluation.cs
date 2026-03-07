@@ -28,8 +28,6 @@ public sealed record Part4RunResult(
 
 public static class Part4Evaluation
 {
-    private const int HorizonSteps = 192;
-    private const int MinutesPerStep = 15;
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
 
     private sealed record PredictionPoint(string ModelName, DateTime AnchorUtcTime, int HorizonStep, double Predicted, string Split);
@@ -201,7 +199,7 @@ public static class Part4Evaluation
             sample.Add(new Part4SamplePoint(
                 prediction.ModelName,
                 prediction.AnchorUtcTime,
-                prediction.AnchorUtcTime.AddMinutes(prediction.HorizonStep * MinutesPerStep),
+                prediction.AnchorUtcTime.AddMinutes(prediction.HorizonStep * PipelineConstants.MinutesPerStep),
                 prediction.HorizonStep,
                 prediction.Predicted,
                 actual));
@@ -236,7 +234,7 @@ public static class Part4Evaluation
                 continue;
             }
 
-            for (var step = 1; step <= HorizonSteps; step++)
+            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
                 points.Add(new ActualPoint(row.AnchorUtcTime, step, row.HorizonTargets[step - 1]));
             }
@@ -260,7 +258,7 @@ public static class Part4Evaluation
         var anchorIndex = FindRequiredIndex(columns, "anchorUtcTime");
         var splitIndex = FindRequiredIndex(columns, "Split");
         var modelIndex = FindRequiredIndex(columns, "Model");
-        var predictedIndexes = Enumerable.Range(1, HorizonSteps)
+        var predictedIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
             .Select(step => FindRequiredIndex(columns, $"Pred_tPlus{step}"))
             .ToArray();
 
@@ -294,7 +292,7 @@ public static class Part4Evaluation
             var split = parts[splitIndex];
             var modelName = parts[modelIndex];
 
-            for (var step = 1; step <= HorizonSteps; step++)
+            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
                 var predicted = ParseRequiredDouble(parts[predictedIndexes[step - 1]], lineNumber, $"Pred_tPlus{step}");
                 var key = (modelName, anchorUtcTime, step);

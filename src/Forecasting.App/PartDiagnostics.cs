@@ -96,8 +96,6 @@ public sealed record DiagnosticsRunResult(
 
 public static class PartDiagnostics
 {
-    private const int HorizonSteps = 192;
-    private const int MinutesPerStep = 15;
     private const int HorizonBucketSize = 24;
     private const int SampleAnchors = 2;
     private static readonly int[] OverlayHorizonSteps = [96, 192];
@@ -450,8 +448,8 @@ public static class PartDiagnostics
                     continue;
                 }
 
-                var roundedSteps = (int)Math.Round(minutes / MinutesPerStep);
-                var expectedMinutes = roundedSteps * MinutesPerStep;
+                var roundedSteps = (int)Math.Round(minutes / PipelineConstants.MinutesPerStep);
+                var expectedMinutes = roundedSteps * PipelineConstants.MinutesPerStep;
                 if (Math.Abs(minutes - expectedMinutes) > 1e-9 || roundedSteps != 1)
                 {
                     irregular++;
@@ -484,7 +482,7 @@ public static class PartDiagnostics
         {
             var split = NormalizeSplit(row.Split);
 
-            for (var step = 1; step <= HorizonSteps; step++)
+            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
                 var key = (split, row.AnchorUtcTime, step);
                 if (!lookup.TryAdd(key, row.HorizonTargets[step - 1]))
@@ -559,7 +557,7 @@ public static class PartDiagnostics
             .Select(pair =>
             {
                 var summary = BuildResidualSummary(pair.Key.ModelName, pair.Key.Split, pair.Value);
-                var bucketEnd = Math.Min(HorizonSteps, pair.Key.BucketStart + HorizonBucketSize - 1);
+                var bucketEnd = Math.Min(PipelineConstants.HorizonSteps, pair.Key.BucketStart + HorizonBucketSize - 1);
                 return new DiagnosticsHorizonBucketSummary(
                     summary.ModelName,
                     summary.Split,
@@ -666,7 +664,7 @@ public static class PartDiagnostics
                 prediction.ModelName,
                 split,
                 prediction.AnchorUtcTime,
-                prediction.AnchorUtcTime.AddMinutes(prediction.HorizonStep * MinutesPerStep),
+                prediction.AnchorUtcTime.AddMinutes(prediction.HorizonStep * PipelineConstants.MinutesPerStep),
                 prediction.HorizonStep,
                 prediction.Predicted,
                 actual,
@@ -696,7 +694,7 @@ public static class PartDiagnostics
                 split,
                 point.ModelName,
                 point.HorizonStep,
-                point.AnchorUtcTime.AddMinutes(point.HorizonStep * MinutesPerStep),
+                point.AnchorUtcTime.AddMinutes(point.HorizonStep * PipelineConstants.MinutesPerStep),
                 point.Predicted,
                 actual));
         }
@@ -811,7 +809,7 @@ public static class PartDiagnostics
         var anchorIndex = FindRequiredIndex(columns, "anchorUtcTime");
         var splitIndex = FindRequiredIndex(columns, "Split");
         var modelIndex = FindRequiredIndex(columns, "Model");
-        var predictedIndexes = Enumerable.Range(1, HorizonSteps)
+        var predictedIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
             .Select(step => FindRequiredIndex(columns, $"Pred_tPlus{step}"))
             .ToArray();
 
@@ -845,7 +843,7 @@ public static class PartDiagnostics
             var split = parts[splitIndex];
             var modelName = parts[modelIndex];
 
-            for (var step = 1; step <= HorizonSteps; step++)
+            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
                 var predicted = ParseRequiredDouble(parts[predictedIndexes[step - 1]], lineNumber, $"Pred_tPlus{step}");
                 var key = (modelName, anchorUtcTime, step);
@@ -1332,7 +1330,7 @@ public static class PartDiagnostics
         var xTicks = new[] { 1, 24, 48, 72, 96, 120, 144, 168, 192 };
         foreach (var tick in xTicks)
         {
-            var x = xMin + (tick - 1d) / (HorizonSteps - 1d) * (xMax - xMin);
+            var x = xMin + (tick - 1d) / (PipelineConstants.HorizonSteps - 1d) * (xMax - xMin);
             svg.AppendLine($"<line x1=\"{F2(x)}\" y1=\"{F2(yMax)}\" x2=\"{F2(x)}\" y2=\"{F2(yMax + 5d)}\" stroke=\"#666\" />");
             svg.AppendLine($"<text x=\"{F2(x)}\" y=\"{F2(yMax + 18d)}\" text-anchor=\"middle\" font-size=\"10\" fill=\"#666\">t+{tick}</text>");
         }
@@ -1398,7 +1396,7 @@ public static class PartDiagnostics
         const double xMax = 920d;
         const double yMin = 20d;
         const double yMax = 220d;
-        const int maxStep = HorizonSteps;
+        const int maxStep = PipelineConstants.HorizonSteps;
 
         return string.Join(' ', points.Select(point =>
         {

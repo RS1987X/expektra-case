@@ -50,8 +50,7 @@ public sealed record PreprocessedDataset(
 
 public static class Part1Preprocessing
 {
-    private const int ValidationWindowDays = 30;
-    public const int DefaultValidationWindowDays = ValidationWindowDays;
+    public const int DefaultValidationWindowDays = PipelineConstants.DefaultValidationWindowDays;
     private static readonly CultureInfo SwedishCulture = CultureInfo.GetCultureInfo("sv-SE");
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
     private static readonly string[] AcceptedDateTimeFormats = ["yyyy-MM-dd HH:mm", "yyyy-MM-dd HH:mm:ss"];
