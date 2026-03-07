@@ -50,6 +50,16 @@ public sealed record DiagnosticsHorizonBucketSummary(
     double UnderPredictionRate,
     double OverPredictionRate);
 
+public sealed record DiagnosticsHorizonStepSummary(
+    string ModelName,
+    int HorizonStep,
+    int EvaluatedPoints,
+    double MeanError,
+    double Mae,
+    double Rmse,
+    double UnderPredictionRate,
+    double OverPredictionRate);
+
 public sealed record DiagnosticsSamplePoint(
     string ModelName,
     string Split,
@@ -79,6 +89,7 @@ public sealed record DiagnosticsRunResult(
     IReadOnlyList<DiagnosticsCadenceSummary> CadenceSummaries,
     IReadOnlyList<DiagnosticsResidualSummary> ResidualSummaries,
     IReadOnlyList<DiagnosticsHorizonBucketSummary> HorizonBucketSummaries,
+    IReadOnlyList<DiagnosticsHorizonStepSummary> ValidationHorizonSummaries,
     IReadOnlyList<DiagnosticsSamplePoint> SamplePoints,
     IReadOnlyList<DiagnosticsTargetPoint> TargetSeries,
     IReadOnlyList<DiagnosticsOverlayPoint> OverlayPoints);
@@ -139,6 +150,7 @@ public static class PartDiagnostics
 
         var residualSummaries = BuildResidualSummaries(predictions, actualLookup);
         var bucketSummaries = BuildHorizonBucketSummaries(predictions, actualLookup);
+        var validationHorizonSummaries = BuildValidationHorizonSummaries(predictions, actualLookup);
         var samplePoints = BuildSamplePoints(predictions, actualLookup);
         var overlayPoints = BuildOverlayPoints(predictions, actualLookup);
         var targetSeries = rows
@@ -152,6 +164,7 @@ public static class PartDiagnostics
             cadence,
             residualSummaries,
             bucketSummaries,
+            validationHorizonSummaries,
             samplePoints,
             targetSeries,
             overlayPoints);
@@ -165,10 +178,40 @@ public static class PartDiagnostics
         WriteCadenceSummaryCsv(result, Path.Combine(outputDirectory, "premodel_cadence.csv"));
         WriteResidualSummaryCsv(result, Path.Combine(outputDirectory, "postmodel_residual_summary.csv"));
         WriteHorizonBucketCsv(result, Path.Combine(outputDirectory, "postmodel_bias_by_horizon_bucket.csv"));
+        WriteValidationHorizonCsv(result, Path.Combine(outputDirectory, "postmodel_validation_error_by_horizon.csv"));
         WriteSampleCsv(result, Path.Combine(outputDirectory, "postmodel_sample_points.csv"));
         WriteTargetSeriesSvg(result, Path.Combine(outputDirectory, "target_over_time.svg"));
         WriteSplitOverlaySvgs(result, outputDirectory);
+        WriteValidationHorizonSvg(result, Path.Combine(outputDirectory, "postmodel_validation_error_by_horizon.svg"));
         WriteHtmlReport(result, Path.Combine(outputDirectory, "diagnostics_report.html"));
+    }
+
+    public static void WriteValidationHorizonCsv(DiagnosticsRunResult result, string outputCsvPath)
+    {
+        EnsureOutputDirectory(outputCsvPath);
+        using var writer = new StreamWriter(outputCsvPath, false);
+        writer.WriteLine("ModelName;HorizonStep;EvaluatedPoints;MeanError;MAE;RMSE;UnderPredictionRate;OverPredictionRate");
+
+        foreach (var summary in result.ValidationHorizonSummaries
+                     .OrderBy(summary => summary.ModelName, StringComparer.Ordinal)
+                     .ThenBy(summary => summary.HorizonStep))
+        {
+            writer.WriteLine(string.Join(';',
+                summary.ModelName,
+                summary.HorizonStep.ToString(InvariantCulture),
+                summary.EvaluatedPoints.ToString(InvariantCulture),
+                summary.MeanError.ToString("F6", InvariantCulture),
+                summary.Mae.ToString("F6", InvariantCulture),
+                summary.Rmse.ToString("F6", InvariantCulture),
+                summary.UnderPredictionRate.ToString("F6", InvariantCulture),
+                summary.OverPredictionRate.ToString("F6", InvariantCulture)));
+        }
+    }
+
+    public static void WriteValidationHorizonSvg(DiagnosticsRunResult result, string outputSvgPath)
+    {
+        EnsureOutputDirectory(outputSvgPath);
+        File.WriteAllText(outputSvgPath, BuildValidationHorizonSvg(result.ValidationHorizonSummaries));
     }
 
     public static void WriteSplitOverlaySvgs(DiagnosticsRunResult result, string outputDirectory)
@@ -348,6 +391,7 @@ public static class PartDiagnostics
         sb.AppendLine($"<h1>Forecast diagnostics</h1><p>Generated UTC: {result.GeneratedAtUtc:yyyy-MM-dd HH:mm:ss}</p>");
 
         AppendTargetSeriesPlot(sb, result.TargetSeries);
+        AppendValidationHorizonPlot(sb, result.ValidationHorizonSummaries);
         AppendSplitOverlayPlots(sb, result.OverlayPoints);
         AppendPreModelTable(sb, result.PreModelSummaries);
         AppendCadenceTable(sb, result.CadenceSummaries);
@@ -521,6 +565,59 @@ public static class PartDiagnostics
                     summary.Split,
                     pair.Key.BucketStart,
                     bucketEnd,
+                    summary.EvaluatedPoints,
+                    summary.MeanError,
+                    summary.Mae,
+                    summary.Rmse,
+                    summary.UnderPredictionRate,
+                    summary.OverPredictionRate);
+            })
+            .ToList();
+    }
+
+    private static List<DiagnosticsHorizonStepSummary> BuildValidationHorizonSummaries(
+        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+    {
+        var stats = new Dictionary<(string ModelName, int HorizonStep), RunningStats>();
+
+        foreach (var prediction in predictions)
+        {
+            if (!string.Equals(prediction.ModelName, OverlayModelName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var split = NormalizeSplit(prediction.Split);
+            if (!string.Equals(split, "Validation", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!actualLookup.TryGetValue((split, prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
+            {
+                continue;
+            }
+
+            var key = (prediction.ModelName, prediction.HorizonStep);
+            if (!stats.TryGetValue(key, out var running))
+            {
+                running = new RunningStats();
+                stats[key] = running;
+            }
+
+            running.Add(prediction.Predicted - actual);
+        }
+
+        return stats
+            .OrderBy(pair => pair.Key.ModelName, StringComparer.Ordinal)
+            .ThenBy(pair => pair.Key.HorizonStep)
+            .Select(pair =>
+            {
+                var summary = BuildResidualSummary(pair.Key.ModelName, "Validation", pair.Value);
+                return new DiagnosticsHorizonStepSummary(
+                    summary.ModelName,
+                    pair.Key.HorizonStep,
                     summary.EvaluatedPoints,
                     summary.MeanError,
                     summary.Mae,
@@ -960,6 +1057,19 @@ public static class PartDiagnostics
         }
     }
 
+    private static void AppendValidationHorizonPlot(StringBuilder sb, IReadOnlyList<DiagnosticsHorizonStepSummary> summaries)
+    {
+        sb.AppendLine("<h2>Validation error by prediction horizon (t+1..t+192)</h2>");
+
+        if (summaries.Count == 0)
+        {
+            sb.AppendLine("<p>No validation horizon error points available.</p>");
+            return;
+        }
+
+        sb.AppendLine(BuildValidationHorizonSvg(summaries));
+    }
+
     private static void AppendResidualTable(StringBuilder sb, IReadOnlyList<DiagnosticsResidualSummary> summaries)
     {
         sb.AppendLine("<h2>Residual summary</h2>");
@@ -1173,6 +1283,85 @@ public static class PartDiagnostics
         {
             var y = 15 + (modelIndex + 1) * 14;
             svg.AppendLine($"<text x=\"75\" y=\"{y}\" font-size=\"11\" fill=\"#1565c0\">{Escape(modelSeries[modelIndex].ModelName)} (Predicted)</text>");
+        }
+
+        svg.AppendLine("</svg>");
+        return svg.ToString();
+    }
+
+    private static string BuildValidationHorizonSvg(IReadOnlyList<DiagnosticsHorizonStepSummary> summaries)
+    {
+        const double xMin = 70d;
+        const double xMax = 920d;
+        const double yMin = 20d;
+        const double yMax = 220d;
+        static string F2(double value) => value.ToString("F2", InvariantCulture);
+
+        var ordered = summaries
+            .OrderBy(summary => summary.ModelName, StringComparer.Ordinal)
+            .ThenBy(summary => summary.HorizonStep)
+            .ToList();
+
+        if (ordered.Count == 0)
+        {
+            return "<p>No validation horizon error points available.</p>";
+        }
+
+        var minY = ordered.Min(summary => summary.MeanError);
+        var maxY = ordered.Max(summary => summary.MeanError);
+        if (Math.Abs(maxY - minY) < 1e-9)
+        {
+            maxY = minY + 1d;
+        }
+
+        var svg = new StringBuilder();
+        svg.AppendLine("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 960 260\" width=\"960\" height=\"260\" role=\"img\" aria-label=\"Validation mean error by horizon\">");
+        svg.AppendLine($"<line x1=\"{F2(xMin)}\" y1=\"{F2(yMax)}\" x2=\"{F2(xMax)}\" y2=\"{F2(yMax)}\" stroke=\"#444\" />");
+        svg.AppendLine($"<line x1=\"{F2(xMin)}\" y1=\"{F2(yMin)}\" x2=\"{F2(xMin)}\" y2=\"{F2(yMax)}\" stroke=\"#444\" />");
+
+        var yTickCount = 5;
+        for (var tick = 0; tick <= yTickCount; tick++)
+        {
+            var fraction = tick / (double)yTickCount;
+            var yValue = maxY - fraction * (maxY - minY);
+            var y = yMin + fraction * (yMax - yMin);
+            svg.AppendLine($"<line x1=\"{F2(xMin - 5d)}\" y1=\"{F2(y)}\" x2=\"{F2(xMin)}\" y2=\"{F2(y)}\" stroke=\"#666\" />");
+            svg.AppendLine($"<text x=\"{F2(xMin - 8d)}\" y=\"{F2(y + 4d)}\" text-anchor=\"end\" font-size=\"10\" fill=\"#666\">{yValue.ToString("F0", InvariantCulture)}</text>");
+        }
+
+        var xTicks = new[] { 1, 24, 48, 72, 96, 120, 144, 168, 192 };
+        foreach (var tick in xTicks)
+        {
+            var x = xMin + (tick - 1d) / (HorizonSteps - 1d) * (xMax - xMin);
+            svg.AppendLine($"<line x1=\"{F2(x)}\" y1=\"{F2(yMax)}\" x2=\"{F2(x)}\" y2=\"{F2(yMax + 5d)}\" stroke=\"#666\" />");
+            svg.AppendLine($"<text x=\"{F2(x)}\" y=\"{F2(yMax + 18d)}\" text-anchor=\"middle\" font-size=\"10\" fill=\"#666\">t+{tick}</text>");
+        }
+
+        svg.AppendLine("<text x=\"495\" y=\"252\" text-anchor=\"middle\" font-size=\"11\" fill=\"#444\">Prediction horizon</text>");
+        svg.AppendLine("<text x=\"18\" y=\"120\" transform=\"rotate(-90,18,120)\" text-anchor=\"middle\" font-size=\"11\" fill=\"#444\">Mean error (pred - actual)</text>");
+
+        var modelGroups = ordered
+            .GroupBy(summary => summary.ModelName)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .ToList();
+
+        var zeroNormalized = (0d - minY) / (maxY - minY);
+        var zeroY = yMax - zeroNormalized * (yMax - yMin);
+        if (zeroY >= yMin && zeroY <= yMax)
+        {
+            svg.AppendLine($"<line x1=\"{F2(xMin)}\" y1=\"{F2(zeroY)}\" x2=\"{F2(xMax)}\" y2=\"{F2(zeroY)}\" stroke=\"#999\" stroke-dasharray=\"4 4\" />");
+        }
+
+        for (var modelIndex = 0; modelIndex < modelGroups.Count; modelIndex++)
+        {
+            var group = modelGroups[modelIndex];
+            var polyline = BuildPolyline(
+                group.Select(summary => (summary.HorizonStep, summary.MeanError)).ToList(),
+                minY,
+                maxY);
+            var color = $"hsl({(modelIndex * 97) % 360} 70% 40%)";
+            svg.AppendLine($"<polyline points=\"{polyline}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"2\" />");
+            svg.AppendLine($"<text x=\"75\" y=\"{15 + modelIndex * 14}\" font-size=\"11\" fill=\"{color}\">{Escape(group.Key)}</text>");
         }
 
         svg.AppendLine("</svg>");

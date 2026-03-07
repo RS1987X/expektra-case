@@ -126,6 +126,8 @@ public class PartDiagnosticsTests
                 "premodel_cadence.csv",
                 "postmodel_residual_summary.csv",
                 "postmodel_bias_by_horizon_bucket.csv",
+                "postmodel_validation_error_by_horizon.csv",
+                "postmodel_validation_error_by_horizon.svg",
                 "postmodel_sample_points.csv",
                 "target_over_time.svg",
                 "diagnostics_report.html"
@@ -153,6 +155,8 @@ public class PartDiagnosticsTests
             var html = File.ReadAllText(Path.Combine(outputDir, "diagnostics_report.html"));
             Assert.Contains("<svg", html);
             Assert.Contains("Target over time (TargetAtT)", html);
+            Assert.Contains("Validation error by prediction horizon (t+1..t+192)", html);
+            Assert.Contains("FastTreeRecursive", html);
             Assert.Contains("Target vs FastTreeRecursive over time by split (t+96, t+192)", html);
             Assert.Contains("Time (UTC)", html);
             Assert.Contains("Target value", html);
