@@ -423,3 +423,182 @@ Implement a deterministic evaluation slice for the Part 3 model outputs on the v
 - `dotnet test ExpekraCase.sln --collect:"XPlat Code Coverage"`
 - `dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part3 <part2_input_csv> <predictions_output_csv> <summary_output_json>`
 - `dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part4 <part2_input_csv> <part3_predictions_csv> <part4_metrics_output> <part4_sample_output>`
+
+## Permutation Feature Importance
+
+### Goal
+
+Compute and persist permutation feature importance (PFI) for the FastTree regression model using ML.NET's built-in `mlContext.Regression.PermutationFeatureImportance(...)` API, evaluated on validation data only, so feature influence is inspectable and explainable.
+
+### Assumptions
+
+- PFI is computed on the one-step training data derived from validation-split rows (the same `OneStepTrainingRow` representation used for FastTree training, but restricted to `Split=Validation`).
+- ML.NET's built-in PFI implementation is used — no custom shuffle logic.
+- The trained `ITransformer` (FastTree model) from Part 3 is reused; PFI does not retrain the model.
+- Feature names are derived from the existing `ToFeatureVector` mapping in `Part3Modeling` and must be kept in sync (enforced by a test assertion and a static `FeatureNames` array whose length is verified at compile time via `[VectorType]` consistency).
+- PFI measures how much each feature's permutation degrades one-step prediction quality (MAE / RMSE / R²), not recursive multi-step quality. This is a pragmatic trade-off: recursive PFI (re-rolling 192 steps per feature per permutation) would be prohibitively expensive and ML.NET does not support it natively.
+- Determinism is provided by the existing `MLContext(seed: 42)` — the PFI API itself does not accept a separate seed parameter.
+- PFI runs unconditionally as part of every `part3` execution (no opt-in flag). The cost (10 permutations × 18 features = 180 evaluation passes over validation rows) is acceptable given the dataset size.
+- If validation has zero rows, PFI is skipped and `Part3RunResult.FeatureImportance` is set to `null` (consistent with the existing Part 3 guard that throws on empty validation for forecasting, but PFI can degrade gracefully since it is supplementary).
+
+### In scope
+
+1. Add a method to `Part3Modeling` that computes PFI using `mlContext.Regression.PermutationFeatureImportance()`.
+2. Return a ranked list of features with per-feature metric deltas (MAE change, RMSE change, R² change) and standard deviations.
+3. Persist PFI results as a CSV artifact to `artifacts/part3_feature_importance.csv` (written by Part 3).
+4. Diagnostics reads the PFI CSV from disk and generates a horizontal bar chart SVG to `artifacts/diagnostics/`.
+5. Include PFI summary in the diagnostics HTML report (omitted gracefully if PFI CSV is absent).
+6. Add a `Part3PfiResult` record (or similar) to `Part3RunResult` for in-memory consumers; also persist to CSV for standalone diagnostics.
+7. Add unit tests for PFI output contract, artifact generation, and feature name sync.
+8. Handle empty validation gracefully: skip PFI, set result to `null`, omit artifacts.
+
+### Out of scope
+
+- Recursive multi-step PFI (shuffling a feature and re-rolling all 192 steps per anchor).
+- SHAP values or other model-specific explainability methods.
+- Feature selection / automatic feature removal based on PFI results.
+- PFI for the baseline seasonal model (not ML-based).
+
+### Ambiguity-resolving definitions
+
+- **Evaluation data for PFI**: validation-split rows converted to `OneStepTrainingRow` (features + `Label = HorizonTargets[0]`). This ensures PFI reflects out-of-sample importance, not training-fit importance.
+- **Permutation count**: use `permutationCount: 10` for stable estimates. Determinism is inherited from `MLContext(seed: 42)` (the PFI API does not accept a separate seed parameter).
+- **Feature name mapping**: the 18 features in `ToFeatureVector` are mapped to human-readable names by index:
+
+  | Index | Feature Name |
+  |-------|-------------|
+  | 0 | TargetAtT |
+  | 1 | Temperature |
+  | 2 | Windspeed |
+  | 3 | SolarIrradiation |
+  | 4 | HourOfDay |
+  | 5 | MinuteOfHour |
+  | 6 | DayOfWeek |
+  | 7 | IsHoliday |
+  | 8 | HourSin |
+  | 9 | HourCos |
+  | 10 | WeekdaySin |
+  | 11 | WeekdayCos |
+  | 12 | TargetLag192 |
+  | 13 | TargetLag672 |
+  | 14 | TargetMean16 |
+  | 15 | TargetStd16 |
+  | 16 | TargetMean96 |
+  | 17 | TargetStd96 |
+
+- **Ranking**: features are ranked by absolute MAE delta (descending). Positive delta = permuting the feature degrades MAE = feature is important.
+- **Artifact format**: CSV with columns `Rank;FeatureName;MaeDelta;MaeDeltaStdDev;RmseDelta;RmseDeltaStdDev;R2Delta;R2DeltaStdDev`, semicolon-delimited, InvariantCulture formatting.
+- **SVG bar chart**: horizontal bars ranked top-to-bottom by importance (MAE delta), with feature names as y-axis labels.
+- **Data flow for diagnostics**: Part 3 writes PFI CSV to `artifacts/part3_feature_importance.csv`. Diagnostics reads this CSV back from disk (new optional input path to `RunDiagnostics`). This keeps the `diagnostics` CLI mode fully standalone — it does not depend on in-memory `Part3RunResult`. If the PFI CSV does not exist, the diagnostics HTML report omits the PFI section gracefully.
+- **Empty validation**: if validation has zero rows usable for PFI, `Part3RunResult.FeatureImportance` is `null`, the PFI CSV is not written, and diagnostics omits the PFI section.
+- **Feature name sync enforcement**: a unit test asserts that `Part3Modeling.FeatureNames` matches a hardcoded expected list of 18 names and that `FeatureNames.Length` equals the `[VectorType]` dimension on `OneStepTrainingRow.Features`. Any feature addition/removal fails the test, forcing both arrays to be updated together.
+
+### Deliverables
+
+1. `Part3PfiResult` record containing per-feature importance metrics.
+2. `ComputePermutationImportance(...)` method in `Part3Modeling` that accepts the trained model, `MLContext`, and validation data, and returns `Part3PfiResult`.
+3. PFI CSV artifact: `artifacts/part3_feature_importance.csv`.
+4. PFI SVG bar chart: `artifacts/diagnostics/feature_importance.svg`.
+5. PFI section in diagnostics HTML report.
+6. Unit tests for PFI output shape, ranking, and artifact contracts.
+
+### Proposed code structure
+
+- `src/Forecasting.App/Part3Modeling.cs`
+  - Add `Part3PfiFeatureResult` record (feature name, MAE/RMSE/R² deltas + std devs, rank).
+  - Add `Part3PfiResult` record (list of feature results, permutation count, evaluation row count).
+  - Add static feature name array (kept in sync with `ToFeatureVector`).
+  - Add `ComputePermutationImportance(...)` method.
+  - Refactor `BuildFastTreeRecursiveModel` to expose the `MLContext` and `ITransformer` (or return them alongside the `FastTreeRecursiveModel`) so PFI can reuse them without retraining.
+  - Wire PFI call into `RunModels` and include result in `Part3RunResult`.
+- `src/Forecasting.App/PartDiagnostics.cs`
+  - Add `ReadFeatureImportanceCsv(string path)` method to parse the Part 3 PFI CSV from disk.
+  - Add `WriteFeatureImportanceSvg(...)` method (horizontal bar chart).
+  - Add PFI section to HTML report builder (omitted if PFI CSV not found).
+  - Extend `RunDiagnostics` signature to accept an optional PFI CSV path (defaulting to `artifacts/part3_feature_importance.csv`).
+- `src/Forecasting.App/Program.cs`
+  - In `part3` mode: call `ComputePermutationImportance`, persist PFI CSV via `Part3Modeling.WriteFeatureImportanceCsv(...)`.
+  - In `diagnostics` mode: read PFI CSV from disk if it exists; pass to diagnostics for SVG/HTML generation.
+  - In `all` mode: same as `part3` + `diagnostics` sequentially.
+- `tests/Forecasting.App.Tests/Part3ModelingTests.cs`
+  - Test PFI result shape: 18 features returned, all named, ranked.
+  - Test that PFI result contains finite metric deltas.
+- `tests/Forecasting.App.Tests/PartDiagnosticsTests.cs`
+  - Test PFI CSV artifact columns and row count.
+  - Test PFI SVG artifact is non-empty and contains expected structure.
+
+### Implementation steps
+
+1. Define PFI records/DTOs
+   - `Part3PfiFeatureResult(int Rank, string FeatureName, double MaeDelta, double MaeDeltaStdDev, double RmseDelta, double RmseDeltaStdDev, double R2Delta, double R2DeltaStdDev)`.
+   - `Part3PfiResult(IReadOnlyList<Part3PfiFeatureResult> Features, int PermutationCount, int EvaluationRowCount)`.
+   - Add static `FeatureNames` array to `Part3Modeling` matching `ToFeatureVector` index order.
+2. Expose trained model internals for PFI
+   - Extend `BuildFastTreeRecursiveModel` or extract a helper so the `MLContext` and `ITransformer` are available after training (currently local variables; need to be returned or stored).
+3. Implement `ComputePermutationImportance`
+   - Guard: if validation rows are empty, return `null`.
+   - Build validation `IDataView` from validation `OneStepTrainingRow` instances.
+   - Call `mlContext.Regression.PermutationFeatureImportance(model, validationDataView, labelColumnName: nameof(OneStepTrainingRow.Label), featureColumnName: nameof(OneStepTrainingRow.Features), permutationCount: 10)`. Determinism is inherited from `MLContext(seed: 42)`.
+   - Map results by index to `FeatureNames`, rank by `|MaeDelta|` descending.
+   - Return `Part3PfiResult`.
+4. Integrate into `RunModels`
+   - Call `ComputePermutationImportance` after model training.
+   - Add `Part3PfiResult` to `Part3RunResult` (or a new extended result record).
+5. Add artifact writers
+   - `Part3Modeling.WriteFeatureImportanceCsv(...)`: semicolon-delimited CSV with header row, written by Part 3.
+   - `PartDiagnostics.ReadFeatureImportanceCsv(...)`: parse PFI CSV back into records for SVG/HTML generation.
+   - `PartDiagnostics.WriteFeatureImportanceSvg(...)`: horizontal bar chart SVG (similar pattern to existing `BuildValidationHorizonSvg`).
+   - Add PFI section to HTML report (omitted if PFI data is absent).
+6. Wire CLI and persistence
+   - `part3` mode: compute PFI, persist CSV to `artifacts/part3_feature_importance.csv`.
+   - `diagnostics` mode: read PFI CSV from disk (if present), generate SVG to `artifacts/diagnostics/feature_importance.svg`, include in HTML.
+   - `all` mode: Part 3 writes CSV, then diagnostics reads it back.
+7. Add tests
+   - Part3: PFI result shape (18 features), all finite, ranked by MAE delta.
+   - Diagnostics: PFI CSV/SVG artifact existence and basic content checks.
+
+### Done criteria
+
+- [ ] PFI is computed using ML.NET's built-in `PermutationFeatureImportance` API on validation data.
+- [ ] PFI uses `permutationCount: 10` with determinism from `MLContext(seed: 42)` (PFI API does not accept a separate seed).
+- [ ] All 18 features are reported with MAE, RMSE, and R² deltas + std devs.
+- [ ] Features are ranked by absolute MAE delta (descending).
+- [ ] PFI CSV artifact is persisted to `artifacts/part3_feature_importance.csv`.
+- [ ] PFI SVG bar chart is persisted to `artifacts/diagnostics/feature_importance.svg`.
+- [ ] PFI section appears in diagnostics HTML report.
+- [ ] Feature names in PFI output match `ToFeatureVector` index order.
+- [ ] PFI does not retrain the model (reuses trained `ITransformer`).
+- [ ] Unit tests verify PFI output contract and artifact generation.
+- [ ] Unit test asserts `FeatureNames` matches expected hardcoded list and `[VectorType]` dimension.
+- [ ] Empty validation produces `null` PFI result without error.
+- [ ] Diagnostics omits PFI section gracefully when PFI CSV is absent.
+- [ ] All existing tests continue to pass.
+
+### Test cases (minimum)
+
+1. PFI result shape
+   - PFI returns exactly 18 feature results with non-empty names.
+   - All metric deltas and std devs are finite numbers.
+2. PFI ranking
+   - Features are ordered by absolute MAE delta descending (rank 1 = most important).
+3. PFI reproducibility
+   - Two consecutive PFI runs with the same data produce identical rankings and metric values (deterministic seed).
+4. PFI artifact contract
+   - CSV has expected header and 18 data rows.
+   - SVG is non-empty and contains `<rect` elements (bars).
+5. Feature name consistency
+   - The feature names in PFI output match a known reference list derived from `ToFeatureVector`.
+   - `FeatureNames.Length` equals the `[VectorType(N)]` dimension on `OneStepTrainingRow.Features`.
+6. Empty validation
+   - When validation has zero rows, `ComputePermutationImportance` returns `null` and no PFI CSV is written.
+7. Diagnostics without PFI CSV
+   - When PFI CSV does not exist on disk, diagnostics runs successfully and the HTML report omits the PFI section.
+
+### Verification (Verifiering)
+
+- `dotnet restore ExpekraCase.sln`
+- `dotnet build ExpekraCase.sln`
+- `dotnet test ExpekraCase.sln`
+- `dotnet test ExpekraCase.sln --collect:"XPlat Code Coverage"`
+- `dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part3 <part2_input_csv> <predictions_output_csv> <summary_output_json>` (verify PFI CSV appears in artifacts)
+- `dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- diagnostics <part2_input_csv> <part3_predictions_csv>` (verify PFI SVG and HTML section)
