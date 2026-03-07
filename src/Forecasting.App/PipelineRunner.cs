@@ -19,6 +19,7 @@ public sealed record PipelineRunRequest(
     int? ValidationWindowDays,
     bool EnablePfi,
     int PfiHorizonStep,
+    int? MaxPart3Rows,
     IReadOnlyDictionary<string, string> InputPaths,
     IReadOnlyDictionary<string, string> OutputPaths);
 
@@ -84,6 +85,7 @@ public static class PipelineRunner
         AddOutputLine(lines, $"Part 2 complete: {part2Dataset.Summary.OutputRows} rows -> {part2OutputPath} (validation window: {validationWindowDays} days)", output);
 
         var part3Rows = Part3Modeling.FromPart2DatasetRows(part2Dataset.Rows);
+        part3Rows = ApplyPart3RowLimit(part3Rows, request.MaxPart3Rows, lines, output);
         var part3Result = Part3Modeling.RunModels(part3Rows, enablePfi: request.EnablePfi, pfiHorizonStep: request.PfiHorizonStep);
         Part3Modeling.WriteForecastsCsv(part3Result.Forecasts, part3OutputPath);
         Part3Modeling.WriteSummaryJson(part3Result.Summary, part3SummaryPath);
@@ -111,6 +113,7 @@ public static class PipelineRunner
             validationWindowDays: validationWindowDays,
             enablePfi: request.EnablePfi,
             pfiHorizonStep: request.PfiHorizonStep,
+            maxPart3Rows: request.MaxPart3Rows,
             inputPaths: request.InputPaths,
             outputPaths: request.OutputPaths);
 
@@ -194,12 +197,13 @@ public static class PipelineRunner
                 $"Input path: {part3InputPath}");
         }
 
+        var lines = new List<string>();
         var part3Rows = Part3Modeling.ReadPart2DatasetCsv(part3InputPath);
+        part3Rows = ApplyPart3RowLimit(part3Rows, request.MaxPart3Rows, lines, output);
         var part3Result = Part3Modeling.RunModels(part3Rows, enablePfi: request.EnablePfi, pfiHorizonStep: request.PfiHorizonStep);
         Part3Modeling.WriteForecastsCsv(part3Result.Forecasts, part3OutputPath);
         Part3Modeling.WriteSummaryJson(part3Result.Summary, part3SummaryPath);
 
-        var lines = new List<string>();
         if (part3Result.FeatureImportance is not null)
         {
             Part3Modeling.WriteFeatureImportanceCsv(part3Result.FeatureImportance, part3PfiPath);
@@ -218,6 +222,7 @@ public static class PipelineRunner
             validationWindowDays: null,
             enablePfi: request.EnablePfi,
             pfiHorizonStep: request.PfiHorizonStep,
+            maxPart3Rows: request.MaxPart3Rows,
             inputPaths: request.InputPaths,
             outputPaths: request.OutputPaths);
 
@@ -362,6 +367,79 @@ public static class PipelineRunner
         return values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
     }
 
+    private static List<Part3InputRow> ApplyPart3RowLimit(
+        IReadOnlyList<Part3InputRow> rows,
+        int? maxPart3Rows,
+        ICollection<string>? lines,
+        Action<string>? output)
+    {
+        if (!maxPart3Rows.HasValue)
+        {
+            return rows as List<Part3InputRow> ?? rows.ToList();
+        }
+
+        if (rows.Count <= maxPart3Rows.Value)
+        {
+            return rows.OrderBy(row => row.AnchorUtcTime).ToList();
+        }
+
+        var trainRows = rows
+            .Where(row => string.Equals(row.Split, "Train", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(row => row.AnchorUtcTime)
+            .ToList();
+        var validationRows = rows
+            .Where(row => string.Equals(row.Split, "Validation", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(row => row.AnchorUtcTime)
+            .ToList();
+
+        if (trainRows.Count == 0 || validationRows.Count == 0)
+        {
+            return rows.OrderBy(row => row.AnchorUtcTime).ToList();
+        }
+
+        var targetTrainRows = Math.Max(1, maxPart3Rows.Value / 2);
+        var targetValidationRows = Math.Max(1, maxPart3Rows.Value - targetTrainRows);
+
+        targetTrainRows = Math.Min(targetTrainRows, trainRows.Count);
+        targetValidationRows = Math.Min(targetValidationRows, validationRows.Count);
+
+        var remainingBudget = maxPart3Rows.Value - (targetTrainRows + targetValidationRows);
+        if (remainingBudget > 0)
+        {
+            var availableTrain = trainRows.Count - targetTrainRows;
+            var addTrain = Math.Min(availableTrain, remainingBudget);
+            targetTrainRows += addTrain;
+            remainingBudget -= addTrain;
+
+            if (remainingBudget > 0)
+            {
+                var availableValidation = validationRows.Count - targetValidationRows;
+                var addValidation = Math.Min(availableValidation, remainingBudget);
+                targetValidationRows += addValidation;
+            }
+        }
+
+        var selected = trainRows
+            .TakeLast(targetTrainRows)
+            .Concat(validationRows.Take(targetValidationRows))
+            .OrderBy(row => row.AnchorUtcTime)
+            .ToList();
+
+        if (lines is not null)
+        {
+            AddOutputLine(
+                lines,
+                $"Part 3 row limit applied for smoke run: {selected.Count}/{rows.Count} rows (Train={targetTrainRows}, Validation={targetValidationRows}).",
+                output);
+        }
+        else
+        {
+            output?.Invoke($"Part 3 row limit applied for smoke run: {selected.Count}/{rows.Count} rows (Train={targetTrainRows}, Validation={targetValidationRows}).");
+        }
+
+        return selected;
+    }
+
     private static void WriteRunManifest(
         string outputDirectory,
         string mode,
@@ -369,6 +447,7 @@ public static class PipelineRunner
         int? validationWindowDays,
         bool enablePfi,
         int pfiHorizonStep,
+        int? maxPart3Rows,
         IReadOnlyDictionary<string, string> inputPaths,
         IReadOnlyDictionary<string, string> outputPaths)
     {
@@ -386,6 +465,7 @@ public static class PipelineRunner
                 Enabled = enablePfi,
                 HorizonStep = enablePfi ? (int?)pfiHorizonStep : null
             },
+            MaxPart3Rows = maxPart3Rows,
             Pipeline = new
             {
                 PipelineConstants.HorizonSteps,

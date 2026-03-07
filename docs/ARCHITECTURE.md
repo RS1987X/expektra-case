@@ -30,9 +30,12 @@ The solution is implemented in .NET 10 under `src/Forecasting.App` and verified 
 		- `Part2DatasetSummary` JSON
 - `Part3Modeling.cs`
 	- Functional core for Part 3 model training and validation forecasting.
+	- Uses a model plug-in seam (`IForecastingModel`) and registry-driven execution.
 	- Models:
 		- Seasonal baseline (`BaselineSeasonal`)
 		- ML.NET FastTree recursive one-step model (`FastTreeRecursive`)
+	- Optional capabilities:
+		- `IPermutationImportanceModel` for models that can provide PFI metrics.
 	- Key outputs:
 		- `Part3ForecastRow` prediction matrix
 		- `Part3RunSummary` JSON
@@ -88,6 +91,29 @@ The solution is implemented in .NET 10 under `src/Forecasting.App` and verified 
 - Part 3 artifacts (`part3` mode):
 	- `artifacts/part3_predictions.csv`
 	- `artifacts/part3_predictions.summary.json`
+
+## Adding a Part 3 Model
+
+Use this flow to add a new forecasting model without changing central orchestration logic.
+
+1. Implement the model contract in `src/Forecasting.App/Part3Modeling.cs`:
+	- Add a class implementing `IForecastingModel` with:
+		- `ModelName` (stable output name written to artifacts)
+		- `Train(IReadOnlyList<Part3InputRow> trainRows, IReadOnlyList<Part3InputRow> allRows)`
+		- `Predict(Part3InputRow anchor)` returning `(Predictions, FallbackSteps)`
+2. If the model supports permutation feature importance, also implement `IPermutationImportanceModel` and return `Part3PfiResult` from `ComputePermutationImportance(...)`.
+3. Register the model in `CreateModelRegistry(...)` in `src/Forecasting.App/Part3Modeling.cs`.
+4. Keep output contract compatibility:
+	- Return exactly `PipelineConstants.HorizonSteps` predictions.
+	- Use deterministic `ModelName` (used by Part 4 and diagnostics grouping).
+	- Ensure fallback counter semantics are explicit and deterministic.
+5. Add tests in `tests/Forecasting.App.Tests/Part3ModelingTests.cs`:
+	- Model appears in `Part3RunSummary.Models`.
+	- Forecast rows are emitted for both `Train` and `Validation` anchors.
+	- Predictions are finite and horizon length is correct.
+	- Any model-specific fallback behavior is validated.
+
+Because `RunModels(...)` iterates over the registry, adding a model should only require model class + registry + tests, not orchestration rewrites.
 
 ## Architectural Style
 

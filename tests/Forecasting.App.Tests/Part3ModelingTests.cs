@@ -194,6 +194,30 @@ public class Part3ModelingTests
     }
 
     [Fact]
+    public void RunModels_SummaryModelsMatchForecastModelSet()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 120, validationCount: 8);
+
+        var result = Part3Modeling.RunModels(rows);
+
+        var modelNamesFromSummary = result.Summary.Models
+            .Select(model => model.ModelName)
+            .ToHashSet(StringComparer.Ordinal);
+        var modelNamesFromForecasts = result.Forecasts
+            .Select(forecast => forecast.ModelName)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Equal(modelNamesFromSummary, modelNamesFromForecasts);
+
+        foreach (var model in result.Summary.Models)
+        {
+            var perModelForecastCount = result.Forecasts.Count(forecast =>
+                string.Equals(forecast.ModelName, model.ModelName, StringComparison.Ordinal));
+            Assert.Equal(model.AnchorsForecasted, perModelForecastCount);
+        }
+    }
+
+    [Fact]
     public void WriteForecastsCsvAndSummaryJson_WritesExpectedArtifacts()
     {
         var rows = BuildSyntheticPart3Rows(trainCount: 300, validationCount: 2);

@@ -39,6 +39,16 @@ Valfri PFI-horisont (standard är `t+1`, tillåtet intervall `1..192`):
 dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part3 --pfi --pfi-horizon 96
 ```
 
+Snabb smoke-körning genom att begränsa Part 3-underlaget (behåller både Train/Validation):
+
+```bash
+dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- all --max-rows 120
+```
+
+Flaggan `--max-rows` kan användas med både `all` och `part3` för snabbare verifieringskörningar.
+
+For utvecklare: guide for att lägga till en ny Part 3-modell finns i `docs/ARCHITECTURE.md` under section `Adding a Part 3 Model`.
+
 Genererade filer skrivs till `artifacts/`.
 Vid `all`- och `part3`-körningar skrivs även `run_manifest.json` med effektiva körinställningar (CLI-args, PFI-horisont, model defaults, paths och git metadata) for reproducerbarhet.
 

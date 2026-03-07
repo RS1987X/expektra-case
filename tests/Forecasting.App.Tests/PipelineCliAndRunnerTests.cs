@@ -14,6 +14,7 @@ public class PipelineCliAndRunnerTests
         Assert.Equal(PipelineConstants.DefaultValidationWindowDays, request.ValidationWindowDays);
         Assert.False(request.EnablePfi);
         Assert.Equal(1, request.PfiHorizonStep);
+        Assert.Null(request.MaxPart3Rows);
         Assert.Equal(Path.Combine("data", "testdata.csv"), request.InputPaths["data"]);
         Assert.Equal(Path.Combine("artifacts", "part3_predictions.csv"), request.OutputPaths["part3PredictionsCsv"]);
     }
@@ -40,6 +41,21 @@ public class PipelineCliAndRunnerTests
     }
 
     [Fact]
+    public void BuildRequest_AllWithMaxRows_ParsesSmokeLimit()
+    {
+        var request = PipelineCliRequestParser.BuildRequest([
+            "all",
+            "30",
+            "--max-rows",
+            "120"
+        ]);
+
+        Assert.NotNull(request);
+        Assert.Equal(PipelineMode.All, request!.Mode);
+        Assert.Equal(120, request.MaxPart3Rows);
+    }
+
+    [Fact]
     public void BuildRequest_UnknownMode_ReturnsNull()
     {
         var request = PipelineCliRequestParser.BuildRequest(["not-a-mode"]);
@@ -57,6 +73,15 @@ public class PipelineCliAndRunnerTests
     }
 
     [Fact]
+    public void BuildRequest_InvalidMaxRows_Throws()
+    {
+        var exception = Assert.Throws<ArgumentException>(() =>
+            PipelineCliRequestParser.BuildRequest(["part3", "--max-rows", "1"]));
+
+        Assert.Contains("Invalid --max-rows value", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Run_Part4MissingInput_StreamsFailureLines()
     {
         var request = new PipelineRunRequest(
@@ -65,6 +90,7 @@ public class PipelineCliAndRunnerTests
             ValidationWindowDays: null,
             EnablePfi: false,
             PfiHorizonStep: 1,
+            MaxPart3Rows: null,
             InputPaths: new Dictionary<string, string>
             {
                 ["part2DatasetCsv"] = Path.Combine(Path.GetTempPath(), $"missing-part2-{Guid.NewGuid():N}.csv"),
@@ -115,6 +141,7 @@ public class PipelineCliAndRunnerTests
                 ValidationWindowDays: 1,
                 EnablePfi: false,
                 PfiHorizonStep: 1,
+                MaxPart3Rows: null,
                 InputPaths: new Dictionary<string, string>
                 {
                     ["data"] = dataPath,
