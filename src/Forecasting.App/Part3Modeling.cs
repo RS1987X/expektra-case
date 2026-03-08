@@ -11,7 +11,7 @@ public static partial class Part3Modeling
 
     private sealed record FeatureSchemaEntry(string Name, Func<FeatureSnapshot, float> Selector);
 
-    private sealed record FeatureSnapshot(
+    internal sealed record FeatureSnapshot(
         double TargetAtT,
         double Temperature,
         double Windspeed,
@@ -148,7 +148,7 @@ public static partial class Part3Modeling
 
         void Train(IReadOnlyList<Part2SupervisedRow> trainRows, IReadOnlyList<Part2SupervisedRow> allRows);
 
-        (double[] Predictions, int FallbackSteps) Predict(Part2SupervisedRow anchor);
+        (double[] Predictions, int RecursiveStepsBeyondAnchor) Predict(Part2SupervisedRow anchor);
     }
 
     private interface IPermutationImportanceModel
@@ -168,7 +168,7 @@ public static partial class Part3Modeling
             _model = BuildSeasonalBaseline(trainRows);
         }
 
-        public (double[] Predictions, int FallbackSteps) Predict(Part2SupervisedRow anchor)
+        public (double[] Predictions, int RecursiveStepsBeyondAnchor) Predict(Part2SupervisedRow anchor)
         {
             return PredictWithBaseline(anchor.AnchorUtcTime, RequireModel());
         }
@@ -196,7 +196,7 @@ public static partial class Part3Modeling
             _model = BuildFastTreeRecursiveModel(trainRows, allRows, _options);
         }
 
-        public (double[] Predictions, int FallbackSteps) Predict(Part2SupervisedRow anchor)
+        public (double[] Predictions, int RecursiveStepsBeyondAnchor) Predict(Part2SupervisedRow anchor)
         {
             return PredictWithFastTreeRecursive(anchor, RequireModel());
         }
@@ -276,7 +276,7 @@ public static partial class Part3Modeling
             _baseLength = Math.Max(0, baseEndIndex + 1);
         }
 
-        public double GetValueAtOrBefore(DateTime timestamp, double fallback)
+        public double GetTargetValueAtOrBefore(DateTime timestamp, double fallback)
         {
             var predictedIndex = UpperBound(_predictedTimestamps, timestamp) - 1;
             if (predictedIndex >= 0)
@@ -378,20 +378,20 @@ public static partial class Part3Modeling
             : null;
 
         var forecasts = new List<Part3ForecastRow>(forecastAnchors.Count * modelRegistry.Count);
-        var fallbackStepsByModel = modelRegistry.ToDictionary(model => model.ModelName, _ => 0, StringComparer.Ordinal);
+        var recursiveStepsByModel = modelRegistry.ToDictionary(model => model.ModelName, _ => 0, StringComparer.Ordinal);
 
         foreach (var anchor in forecastAnchors)
         {
             foreach (var model in modelRegistry)
             {
                 var prediction = model.Predict(anchor);
-                fallbackStepsByModel[model.ModelName] += prediction.FallbackSteps;
+                recursiveStepsByModel[model.ModelName] += prediction.RecursiveStepsBeyondAnchor;
 
                 forecasts.Add(new Part3ForecastRow(
                     anchor.AnchorUtcTime,
                     anchor.Split,
                     model.ModelName,
-                    prediction.FallbackSteps,
+                    prediction.RecursiveStepsBeyondAnchor,
                     prediction.Predictions,
                     anchor.HorizonTargets));
             }
@@ -402,7 +402,7 @@ public static partial class Part3Modeling
                 model.ModelName,
                 forecastAnchors.Count,
                 PipelineConstants.HorizonSteps,
-                fallbackStepsByModel[model.ModelName]))
+                recursiveStepsByModel[model.ModelName]))
             .ToList();
 
         var summary = new Part3RunSummary(
@@ -494,10 +494,10 @@ public static partial class Part3Modeling
         return new SeasonalBaselineModel(grouped, trainRows.Average(row => row.TargetAtT));
     }
 
-    private static (double[] Predictions, int FallbackSteps) PredictWithBaseline(DateTime anchorUtcTime, SeasonalBaselineModel model)
+    private static (double[] Predictions, int RecursiveStepsBeyondAnchor) PredictWithBaseline(DateTime anchorUtcTime, SeasonalBaselineModel model)
     {
         var predictions = new double[PipelineConstants.HorizonSteps];
-        var fallbackSteps = 0;
+        var recursiveStepsBeyondAnchor = 0;
 
         for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
         {
@@ -509,11 +509,11 @@ public static partial class Part3Modeling
                 continue;
             }
 
-            fallbackSteps++;
+            recursiveStepsBeyondAnchor++;
             predictions[step - 1] = model.GlobalMean;
         }
 
-        return (predictions, fallbackSteps);
+        return (predictions, recursiveStepsBeyondAnchor);
     }
 
     /// <summary>
@@ -568,6 +568,49 @@ public static partial class Part3Modeling
         var predictionEngine = mlContext.Model.CreatePredictionEngine<OneStepModelInput, OneStepPrediction>(
             model, inputSchemaDefinition: schema);
 
+        var history = BuildRecursiveHistory(allRows);
+
+        return new FastTreeRecursiveModel(mlContext, model, predictionEngine, history.RowByTimestamp, history.HistoryTimestamps, history.HistoryValues);
+    }
+
+    private static (double[] Predictions, int RecursiveStepsBeyondAnchor) PredictWithFastTreeRecursive(
+        Part2SupervisedRow anchor,
+        FastTreeRecursiveModel model)
+    {
+        var features = new float[FeatureSchema.Length];
+        // Reuse input wrapper + feature buffer across recursive steps to avoid per-step allocations.
+        var reusableRow = new OneStepModelInput { Features = features };
+
+        // Keep production FastTree scoring on the same recursive rollout used by test scorers,
+        // so the state-transition logic can be verified independently of ML.NET internals.
+        return PredictRecursively(
+            anchor,
+            model.RowByTimestamp,
+            model.HistoryTimestamps,
+            model.HistoryValues,
+            snapshot =>
+            {
+                FillFeatureVector(snapshot, features);
+                var score = model.PredictionEngine.Predict(reusableRow).Score;
+                // Avoid propagating invalid model output through the recursive rollout.
+                return double.IsFinite(score) ? score : snapshot.TargetAtT;
+            });
+    }
+
+    // Test seam: reuse the same recursive rollout with a deterministic scorer so tests can
+    // assert exact step-by-step outputs without depending on ML.NET tree internals.
+    internal static (double[] Predictions, int RecursiveStepsBeyondAnchor) PredictWithRecursiveOracle(
+        Part2SupervisedRow anchor,
+        IReadOnlyList<Part2SupervisedRow> allRows,
+        Func<FeatureSnapshot, double> scorer)
+    {
+        var history = BuildRecursiveHistory(allRows);
+        return PredictRecursively(anchor, history.RowByTimestamp, history.HistoryTimestamps, history.HistoryValues, scorer);
+    }
+
+    private static (IReadOnlyDictionary<DateTime, Part2SupervisedRow> RowByTimestamp, DateTime[] HistoryTimestamps, double[] HistoryValues) BuildRecursiveHistory(
+        IReadOnlyList<Part2SupervisedRow> allRows)
+    {
         // Build both lookup and deduplicated history in one ordered pass.
         var rowByTimestamp = new Dictionary<DateTime, Part2SupervisedRow>();
         var historyRows = new List<Part2SupervisedRow>();
@@ -586,22 +629,31 @@ public static partial class Part3Modeling
             historyRows.Add(row);
         }
 
-        var historyTimestamps = historyRows.Select(row => row.AnchorUtcTime).ToArray();
-        var historyValues = historyRows.Select(row => row.TargetAtT).ToArray();
-
-        return new FastTreeRecursiveModel(mlContext, model, predictionEngine, rowByTimestamp, historyTimestamps, historyValues);
+        return (
+            rowByTimestamp,
+            historyRows.Select(row => row.AnchorUtcTime).ToArray(),
+            historyRows.Select(row => row.TargetAtT).ToArray());
     }
 
-    private static (double[] Predictions, int FallbackSteps) PredictWithFastTreeRecursive(
+    /// <summary>
+    /// Executes the recursive rollout for one anchor.
+    /// The caller supplies the scoring function; this method owns the prediction mechanics:
+    /// step timing, context lookup, history reads, lag/rolling updates, and feeding each
+    /// predicted value back into history for subsequent steps.
+    /// </summary>
+    private static (double[] Predictions, int RecursiveStepsBeyondAnchor) PredictRecursively(
         Part2SupervisedRow anchor,
-        FastTreeRecursiveModel model)
+        IReadOnlyDictionary<DateTime, Part2SupervisedRow> rowByTimestamp,
+        DateTime[] historyTimestamps,
+        double[] historyValues,
+        Func<FeatureSnapshot, double> scorer)
     {
         var predictions = new double[PipelineConstants.HorizonSteps];
-        var fallbackSteps = 0;
+        var recursiveStepsBeyondAnchor = 0;
 
-        var baseEndIndex = UpperBound(model.HistoryTimestamps, model.HistoryTimestamps.Length, anchor.AnchorUtcTime) - 1;
+        var baseEndIndex = UpperBound(historyTimestamps, historyTimestamps.Length, anchor.AnchorUtcTime) - 1;
         // Working timeline for this anchor: start with known past, then append each new prediction so later steps can use it as history.
-        var history = new RecursiveHistoryState(model.HistoryTimestamps, model.HistoryValues, baseEndIndex);
+        var history = new RecursiveHistoryState(historyTimestamps, historyValues, baseEndIndex);
 
         var targetLag192Rolling16 = history.InitializeRollingWindow(
             anchor.AnchorUtcTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep),
@@ -612,41 +664,34 @@ public static partial class Part3Modeling
             FeatureConfig.RollingWindow96,
             anchor.TargetLag192Mean96);
 
-        var lastTemperature = anchor.Temperature;
-        var lastWindspeed = anchor.Windspeed;
-        var lastSolar = anchor.SolarIrradiation;
-
-        // Reuse a single training row and feature array across all 192 steps to avoid ~14M allocations.
-        var features = new float[FeatureSchema.Length];
-        var reusableRow = new OneStepModelInput { Features = features };
-
         for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
         {
+            // currentTime represents the feature timestamp t used to predict the next point t+1.
             var currentTime = anchor.AnchorUtcTime.AddMinutes((step - 1) * PipelineConstants.MinutesPerStep);
 
-            var hasContext = model.RowByTimestamp.TryGetValue(currentTime, out var contextRow);
-            var temperature = hasContext ? contextRow!.Temperature : lastTemperature;
-            var windspeed = hasContext ? contextRow!.Windspeed : lastWindspeed;
-            var solar = hasContext ? contextRow!.SolarIrradiation : lastSolar;
+            // Only use exogenous variables known at the anchor. Calendar-derived context such as
+            // holiday status may still advance with time because it is known in advance.
+            var hasCalendarContext = rowByTimestamp.TryGetValue(currentTime, out var contextRow);
+            var temperature = anchor.Temperature;
+            var windspeed = anchor.Windspeed;
+            var solar = anchor.SolarIrradiation;
 
-            if (!hasContext)
+            if (currentTime > anchor.AnchorUtcTime)
             {
-                fallbackSteps++;
+                recursiveStepsBeyondAnchor++;
             }
 
-            lastTemperature = temperature;
-            lastWindspeed = windspeed;
-            lastSolar = solar;
-
-            var targetAtT = history.GetValueAtOrBefore(currentTime, anchor.TargetAtT);
-
-            var targetLag192 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep), anchor.TargetLag192);
-            var targetLag672 = history.GetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep), anchor.TargetLag672);
+            // Read autoregressive inputs from the truncated history view. Once predictions start,
+            // later steps see earlier predicted values instead of future actual targets.
+            var stepTargetAtT = history.GetTargetValueAtOrBefore(currentTime, anchor.TargetAtT);
+            var stepTargetLag192 = history.GetTargetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep), anchor.TargetLag192);
+            var stepTargetLag672 = history.GetTargetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep), anchor.TargetLag672);
+            
             if (step > 1)
             {
                 // Keep rolling windows aligned with their lagged timeline (t-192).
-                targetLag192Rolling16.Push(targetLag192);
-                targetLag192Rolling96.Push(targetLag192);
+                targetLag192Rolling16.Push(stepTargetLag192);
+                targetLag192Rolling96.Push(stepTargetLag192);
             }
 
             var hour = currentTime.Hour;
@@ -655,21 +700,21 @@ public static partial class Part3Modeling
             var cyclic = CyclicLookup[GetCyclicLookupIndex(currentTime)];
 
             // Canonical feature projection for recursive inference state.
-            FillFeatureVector(new FeatureSnapshot(
-                targetAtT,
+            var snapshot = new FeatureSnapshot(
+                stepTargetAtT,
                 temperature,
                 windspeed,
                 solar,
                 hour,
                 minute,
                 dayOfWeek,
-                hasContext && contextRow!.IsHoliday,
+                hasCalendarContext && contextRow!.IsHoliday,
                 cyclic.HourSin,
                 cyclic.HourCos,
                 cyclic.WeekdaySin,
                 cyclic.WeekdayCos,
-                targetLag192,
-                targetLag672,
+                stepTargetLag192,
+                stepTargetLag672,
                 targetLag192Rolling16.Mean,
                 targetLag192Rolling16.Std,
                 targetLag192Rolling96.Mean,
@@ -677,21 +722,22 @@ public static partial class Part3Modeling
                 anchor.TargetLag672Mean16,
                 anchor.TargetLag672Std16,
                 anchor.TargetLag672Mean96,
-                anchor.TargetLag672Std96),
-                features);
+                anchor.TargetLag672Std96);
 
-            var score = model.PredictionEngine.Predict(reusableRow).Score;
-            var predicted = double.IsFinite(score) ? score : targetAtT;
-            predictions[step - 1] = predicted;
+            // Score the current snapshot, either with ML.NET in production or a deterministic
+            // oracle scorer in tests.
+            var stepPrediction = scorer(snapshot);
+            predictions[step - 1] = stepPrediction;
 
             var nextTimestamp = currentTime.AddMinutes(PipelineConstants.MinutesPerStep);
             if (nextTimestamp > anchor.AnchorUtcTime)
             {
-                history.AppendPredicted(nextTimestamp, predicted);
+                // Feed the new prediction back into history so subsequent steps recurse on it.
+                history.AppendPredicted(nextTimestamp, stepPrediction);
             }
         }
 
-        return (predictions, fallbackSteps);
+        return (predictions, recursiveStepsBeyondAnchor);
     }
 
     private static int UpperBound(DateTime[] values, int length, DateTime target)

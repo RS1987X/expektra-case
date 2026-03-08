@@ -1,0 +1,51 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Restore",
+      "type": "shell",
+      "command": "${env:HOME}/.dotnet/dotnet",
+      "args": [
+        "restore",
+        "ExpekraCase.sln"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Build",
+      "type": "shell",
+      "command": "${env:HOME}/.dotnet/dotnet",
+      "args": [
+        "build",
+        "ExpekraCase.sln",
+        "--no-restore"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "dependsOn": "Restore",
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "Test",
+      "type": "shell",
+      "command": "${env:HOME}/.dotnet/dotnet",
+      "args": [
+        "test",
+        "ExpekraCase.sln",
+        "--no-build"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "dependsOn": "Build",
+      "problemMatcher": "$msCompile"
+    }
+  ]
+}
