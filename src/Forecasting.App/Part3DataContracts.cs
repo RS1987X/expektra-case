@@ -1,3 +1,4 @@
+// Output data types produced by Part3 modeling (forecasts, summaries, PFI results).
 namespace Forecasting.App;
 
 public sealed record Part3ForecastRow(
