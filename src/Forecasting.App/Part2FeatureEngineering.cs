@@ -97,7 +97,7 @@ public static class Part2FeatureEngineering
     {
         var sorted = inputRows.OrderBy(row => row.UtcTime).ToList();
         var inputRowsBeforeDeduplication = sorted.Count;
-        sorted = DeduplicateByUtcTimeKeepLast(sorted, out var droppedDuplicateTimestampRows);
+        sorted = CollectionHelpers.DeduplicateByKeyKeepLast(sorted, row => row.UtcTime, out var droppedDuplicateTimestampRows);
 
         if (sorted.Count == 0)
         {
@@ -338,24 +338,6 @@ public static class Part2FeatureEngineering
         }
 
         return Math.Sqrt(sumSquaredDiff / count);
-    }
-
-    private static List<FeatureRow> DeduplicateByUtcTimeKeepLast(IReadOnlyList<FeatureRow> rows, out int droppedRows)
-    {
-        if (rows.Count == 0)
-        {
-            droppedRows = 0;
-            return [];
-        }
-
-        var deduplicated = rows
-            .GroupBy(row => row.UtcTime)
-            .Select(group => group.Last())
-            .OrderBy(row => row.UtcTime)
-            .ToList();
-
-        droppedRows = rows.Count - deduplicated.Count;
-        return deduplicated;
     }
 
 }

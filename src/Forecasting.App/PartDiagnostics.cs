@@ -104,8 +104,6 @@ public static class PartDiagnostics
     private const string OverlayModelName = "FastTreeRecursive";
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
 
-    private sealed record PredictionPoint(string ModelName, DateTime AnchorUtcTime, int HorizonStep, double Predicted, string Split);
-
     private sealed record ActualPoint(DateTime AnchorUtcTime, int HorizonStep, double Actual);
 
     private sealed class RunningStats
@@ -145,7 +143,7 @@ public static class PartDiagnostics
     public static DiagnosticsRunResult RunDiagnostics(string part2InputCsvPath, string part3PredictionsCsvPath, string? pfiCsvPath)
     {
         var rows = Part3Modeling.ReadPart2DatasetCsv(part2InputCsvPath);
-        var predictions = ReadPredictionPoints(part3PredictionsCsvPath);
+        var predictions = PredictionPoints.ReadFromPredictionsCsv(part3PredictionsCsvPath);
 
         IReadOnlyList<Part3PfiFeatureResult>? featureImportance = null;
         if (!string.IsNullOrWhiteSpace(pfiCsvPath) && File.Exists(pfiCsvPath))
@@ -161,13 +159,13 @@ public static class PartDiagnostics
         IReadOnlyList<Part3ForecastRow> forecastRows,
         IReadOnlyList<Part3PfiFeatureResult>? featureImportance = null)
     {
-        var predictions = BuildPredictionPoints(forecastRows);
+        var predictions = PredictionPoints.BuildFromForecastRows(forecastRows);
         return RunDiagnostics(rows, predictions, featureImportance);
     }
 
     private static DiagnosticsRunResult RunDiagnostics(
         IReadOnlyList<Part3InputRow> rows,
-        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyList<ForecastPredictionPoint> predictions,
         IReadOnlyList<Part3PfiFeatureResult>? featureImportance)
     {
         var preModel = BuildPreModelSummaries(rows);
@@ -534,7 +532,7 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsResidualSummary> BuildResidualSummaries(
-        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyList<ForecastPredictionPoint> predictions,
         IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var stats = new Dictionary<(string ModelName, string Split), RunningStats>(new ModelSplitComparer());
@@ -564,7 +562,7 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsHorizonBucketSummary> BuildHorizonBucketSummaries(
-        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyList<ForecastPredictionPoint> predictions,
         IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var stats = new Dictionary<(string ModelName, string Split, int BucketStart), RunningStats>(new ModelSplitBucketComparer());
@@ -611,7 +609,7 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsHorizonStepSummary> BuildValidationHorizonSummaries(
-        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyList<ForecastPredictionPoint> predictions,
         IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var stats = new Dictionary<(string ModelName, int HorizonStep), RunningStats>();
@@ -664,7 +662,7 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsSamplePoint> BuildSamplePoints(
-        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyList<ForecastPredictionPoint> predictions,
         IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var selectedAnchors = predictions
@@ -712,7 +710,7 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsOverlayPoint> BuildOverlayPoints(
-        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyList<ForecastPredictionPoint> predictions,
         IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var overlays = new List<DiagnosticsOverlayPoint>();
@@ -829,94 +827,6 @@ public static class PartDiagnostics
         }
 
         return numerator / denominator;
-    }
-
-    private static List<PredictionPoint> ReadPredictionPoints(string predictionsCsvPath)
-    {
-        var points = new List<PredictionPoint>();
-        using var reader = new StreamReader(predictionsCsvPath);
-
-        var header = reader.ReadLine();
-        if (string.IsNullOrWhiteSpace(header))
-        {
-            return points;
-        }
-
-        var columns = header.Split(';');
-        var anchorIndex = CsvParsing.FindRequiredColumnIndex(columns, "anchorUtcTime", "predictions CSV");
-        var splitIndex = CsvParsing.FindRequiredColumnIndex(columns, "Split", "predictions CSV");
-        var modelIndex = CsvParsing.FindRequiredColumnIndex(columns, "Model", "predictions CSV");
-        var predictedIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
-            .Select(step => CsvParsing.FindRequiredColumnIndex(columns, $"Pred_tPlus{step}", "predictions CSV"))
-            .ToArray();
-
-        var seenKeys = new HashSet<(string ModelName, DateTime AnchorUtcTime, int HorizonStep)>();
-        string? line;
-        var lineNumber = 1;
-        while ((line = reader.ReadLine()) is not null)
-        {
-            lineNumber++;
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            var parts = line.Split(';');
-            if (parts.Length < columns.Length)
-            {
-                throw new FormatException($"Invalid prediction row at line {lineNumber}: expected {columns.Length} columns.");
-            }
-
-            var anchorUtcTime = CsvParsing.ParseRequiredUtcDateTime(parts[anchorIndex], lineNumber, "anchorUtcTime");
-
-            var split = parts[splitIndex];
-            var modelName = parts[modelIndex];
-
-            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
-            {
-                var predicted = CsvParsing.ParseRequiredDouble(parts[predictedIndexes[step - 1]], lineNumber, $"Pred_tPlus{step}", rejectNonFinite: true);
-                var key = (modelName, anchorUtcTime, step);
-                if (!seenKeys.Add(key))
-                {
-                    throw new InvalidOperationException(
-                        $"Duplicate prediction key for model '{modelName}', anchor '{anchorUtcTime:yyyy-MM-dd HH:mm:ss}', horizon '{step}'.");
-                }
-
-                points.Add(new PredictionPoint(modelName, anchorUtcTime, step, predicted, split));
-            }
-        }
-
-        return points;
-    }
-
-    private static List<PredictionPoint> BuildPredictionPoints(IReadOnlyList<Part3ForecastRow> forecastRows)
-    {
-        var points = new List<PredictionPoint>();
-        var seenKeys = new HashSet<(string ModelName, DateTime AnchorUtcTime, int HorizonStep)>();
-
-        foreach (var row in forecastRows)
-        {
-            if (row.PredictedTargets.Count < PipelineConstants.HorizonSteps)
-            {
-                throw new FormatException(
-                    $"Invalid in-memory forecast row for model '{row.ModelName}' at anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}': expected {PipelineConstants.HorizonSteps} predicted targets.");
-            }
-
-            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
-            {
-                var predicted = row.PredictedTargets[step - 1];
-                var key = (row.ModelName, row.AnchorUtcTime, step);
-                if (!seenKeys.Add(key))
-                {
-                    throw new InvalidOperationException(
-                        $"Duplicate prediction key for model '{row.ModelName}', anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}', horizon '{step}'.");
-                }
-
-                points.Add(new PredictionPoint(row.ModelName, row.AnchorUtcTime, step, predicted, row.Split));
-            }
-        }
-
-        return points;
     }
 
     private static string NormalizeSplit(string split)

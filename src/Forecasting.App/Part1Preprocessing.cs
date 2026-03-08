@@ -59,7 +59,7 @@ public static class Part1Preprocessing
     public static IReadOnlyList<FeatureRow> BuildFeatureMatrix(string dataCsvPath, string holidaysCsvPath)
     {
         var rawRows = ReadRawDataRows(dataCsvPath).OrderBy(row => row.UtcTime).ToList();
-        rawRows = DeduplicateByUtcTimeKeepLast(rawRows, out _);
+        rawRows = CollectionHelpers.DeduplicateByKeyKeepLast(rawRows, row => row.UtcTime, out _);
         var holidays = ReadSwedishPublicHolidays(holidaysCsvPath);
         var targets = ForwardFillTargets(rawRows.Select(row => row.Target).ToList());
         var temperatures = ForwardFillRequiredSeries(rawRows.Select(row => row.Temperature).ToList(), "Temperature");
@@ -111,7 +111,7 @@ public static class Part1Preprocessing
 
         var rawRows = ReadRawDataRows(dataCsvPath).OrderBy(row => row.UtcTime).ToList();
         var inputRowsBeforeDeduplication = rawRows.Count;
-        rawRows = DeduplicateByUtcTimeKeepLast(rawRows, out var droppedDuplicateTimestampRows);
+        rawRows = CollectionHelpers.DeduplicateByKeyKeepLast(rawRows, row => row.UtcTime, out var droppedDuplicateTimestampRows);
         if (rawRows.Count == 0)
         {
             var emptySummary = new PreprocessingAuditSummary(DateTime.MinValue, 0, 0, 0, 0, 0, 0, 0);
@@ -463,24 +463,6 @@ public static class Part1Preprocessing
             throw new InvalidOperationException(
                 $"{columnName} has no observed values before validation start ({validationStartUtc:yyyy-MM-dd HH:mm:ss} UTC).");
         }
-    }
-
-    private static List<RawDataRow> DeduplicateByUtcTimeKeepLast(IReadOnlyList<RawDataRow> rows, out int droppedRows)
-    {
-        if (rows.Count == 0)
-        {
-            droppedRows = 0;
-            return [];
-        }
-
-        var deduplicated = rows
-            .GroupBy(row => row.UtcTime)
-            .Select(group => group.Last())
-            .OrderBy(row => row.UtcTime)
-            .ToList();
-
-        droppedRows = rows.Count - deduplicated.Count;
-        return deduplicated;
     }
 
     private static double? ParseNullableDouble(string value, int lineNumber, string columnName)
