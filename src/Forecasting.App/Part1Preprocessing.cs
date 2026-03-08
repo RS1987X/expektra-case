@@ -228,11 +228,7 @@ public static class Part1Preprocessing
 
     public static void WriteFeatureMatrixCsv(IReadOnlyList<FeatureRow> features, string outputCsvPath)
     {
-        var directory = Path.GetDirectoryName(outputCsvPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        FileOutput.EnsureParentDirectory(outputCsvPath);
 
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("utcTime;Target;Temperature;Windspeed;SolarIrradiation;HourOfDay;MinuteOfHour;DayOfWeek;IsHoliday;HourSin;HourCos;WeekdaySin;WeekdayCos");
@@ -258,11 +254,7 @@ public static class Part1Preprocessing
 
     public static void WritePreprocessingAuditCsv(IReadOnlyList<PreprocessingAuditEvent> auditEvents, string outputCsvPath)
     {
-        var directory = Path.GetDirectoryName(outputCsvPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        FileOutput.EnsureParentDirectory(outputCsvPath);
 
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("utcTime;EventType;Reason;IsValidation;IsTargetImputed;ImputationSource");
@@ -281,11 +273,7 @@ public static class Part1Preprocessing
 
     public static void WritePreprocessingSummaryJson(PreprocessingAuditSummary summary, string outputJsonPath)
     {
-        var directory = Path.GetDirectoryName(outputJsonPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        FileOutput.EnsureParentDirectory(outputJsonPath);
 
         var json = JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(outputJsonPath, json);

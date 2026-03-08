@@ -632,11 +632,7 @@ public static class Part3Modeling
 
     public static void WriteForecastsCsv(IReadOnlyList<Part3ForecastRow> forecasts, string outputCsvPath)
     {
-        var directory = Path.GetDirectoryName(outputCsvPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        FileOutput.EnsureParentDirectory(outputCsvPath);
 
         using var writer = new StreamWriter(outputCsvPath, false);
         // Build header once and reuse a row buffer for lower per-row allocation pressure.
@@ -741,11 +737,7 @@ public static class Part3Modeling
 
     public static void WriteSummaryJson(Part3RunSummary summary, string outputJsonPath)
     {
-        var directory = Path.GetDirectoryName(outputJsonPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        FileOutput.EnsureParentDirectory(outputJsonPath);
 
         var json = JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(outputJsonPath, json);
@@ -753,11 +745,7 @@ public static class Part3Modeling
 
     public static void WriteFeatureImportanceCsv(Part3PfiResult pfiResult, string outputCsvPath)
     {
-        var directory = Path.GetDirectoryName(outputCsvPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        FileOutput.EnsureParentDirectory(outputCsvPath);
 
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("Rank;FeatureName;MaeDelta;MaeDeltaStdDev;RmseDelta;RmseDeltaStdDev;R2Delta;R2DeltaStdDev");

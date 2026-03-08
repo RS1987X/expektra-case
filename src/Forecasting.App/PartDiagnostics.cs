@@ -222,7 +222,7 @@ public static class PartDiagnostics
 
     public static void WriteValidationHorizonCsv(DiagnosticsRunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("ModelName;HorizonStep;EvaluatedPoints;MeanError;MAE;RMSE;UnderPredictionRate;OverPredictionRate");
 
@@ -244,7 +244,7 @@ public static class PartDiagnostics
 
     public static void WriteValidationHorizonSvg(DiagnosticsRunResult result, string outputSvgPath)
     {
-        EnsureOutputDirectory(outputSvgPath);
+        FileOutput.EnsureParentDirectory(outputSvgPath);
         File.WriteAllText(outputSvgPath, BuildValidationHorizonSvg(result.ValidationHorizonSummaries));
     }
 
@@ -271,7 +271,7 @@ public static class PartDiagnostics
 
     private static void WriteSplitOverlayCsv(IReadOnlyList<DiagnosticsOverlayPoint> points, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("Split;ModelName;HorizonStep;ForecastUtcTime;Actual;Predicted;Residual");
 
@@ -291,14 +291,14 @@ public static class PartDiagnostics
 
     public static void WriteTargetSeriesSvg(DiagnosticsRunResult result, string outputSvgPath)
     {
-        EnsureOutputDirectory(outputSvgPath);
+        FileOutput.EnsureParentDirectory(outputSvgPath);
         var svg = BuildTargetSeriesSvg(result.TargetSeries);
         File.WriteAllText(outputSvgPath, svg);
     }
 
     public static void WritePreModelSummaryCsv(DiagnosticsRunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("Split;AnchorCount;MeanTarget;StdTarget;MinTarget;P05Target;P50Target;P95Target;MaxTarget;TrendSlopePerStep");
 
@@ -320,7 +320,7 @@ public static class PartDiagnostics
 
     public static void WriteCadenceSummaryCsv(DiagnosticsRunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("Split;AnchorCount;IrregularIntervalCount;MissingStepCount;NonPositiveIntervalCount;MinIntervalMinutes;MeanIntervalMinutes;MaxIntervalMinutes");
 
@@ -340,7 +340,7 @@ public static class PartDiagnostics
 
     public static void WriteResidualSummaryCsv(DiagnosticsRunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("ModelName;Split;EvaluatedPoints;MeanError;MAE;RMSE;ResidualP05;ResidualP50;ResidualP95;UnderPredictionRate;OverPredictionRate");
 
@@ -365,7 +365,7 @@ public static class PartDiagnostics
 
     public static void WriteHorizonBucketCsv(DiagnosticsRunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("ModelName;Split;HorizonStart;HorizonEnd;EvaluatedPoints;MeanError;MAE;RMSE;UnderPredictionRate;OverPredictionRate");
 
@@ -390,7 +390,7 @@ public static class PartDiagnostics
 
     public static void WriteSampleCsv(DiagnosticsRunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("ModelName;Split;AnchorUtcTime;ForecastUtcTime;HorizonStep;Predicted;Actual;Residual");
 
@@ -414,7 +414,7 @@ public static class PartDiagnostics
 
     public static void WriteHtmlReport(DiagnosticsRunResult result, string outputHtmlPath)
     {
-        EnsureOutputDirectory(outputHtmlPath);
+        FileOutput.EnsureParentDirectory(outputHtmlPath);
 
         var sb = new StringBuilder();
         sb.AppendLine("<!doctype html>");
@@ -929,15 +929,6 @@ public static class PartDiagnostics
         return split.Trim();
     }
 
-    private static void EnsureOutputDirectory(string path)
-    {
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-    }
-
     private static void AppendPreModelTable(StringBuilder sb, IReadOnlyList<DiagnosticsPreModelSummary> summaries)
     {
         sb.AppendLine("<h2>Pre-model target shift</h2>");
@@ -1352,7 +1343,7 @@ public static class PartDiagnostics
 
     public static void WriteFeatureImportanceSvg(IReadOnlyList<Part3PfiFeatureResult> features, string outputSvgPath)
     {
-        EnsureOutputDirectory(outputSvgPath);
+        FileOutput.EnsureParentDirectory(outputSvgPath);
         File.WriteAllText(outputSvgPath, BuildFeatureImportanceSvg(features));
     }
 

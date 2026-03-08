@@ -73,7 +73,7 @@ public static class Part4Evaluation
 
     public static void WriteMetricsCsv(Part4RunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
 
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("ModelName;EvaluatedPoints;MapeEvaluatedPoints;ZeroActualExcludedPoints;MAE;RMSE;MAPE");
@@ -93,7 +93,7 @@ public static class Part4Evaluation
 
     public static void WriteSampleCsv(Part4RunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
 
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("ModelName;AnchorUtcTime;ForecastUtcTime;HorizonStep;Predicted;Actual");
@@ -345,15 +345,6 @@ public static class Part4Evaluation
         }
 
         return points;
-    }
-
-    private static void EnsureOutputDirectory(string path)
-    {
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
     }
 
     private sealed class MetricsAccumulator
