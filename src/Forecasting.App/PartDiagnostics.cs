@@ -843,11 +843,11 @@ public static class PartDiagnostics
         }
 
         var columns = header.Split(';');
-        var anchorIndex = FindRequiredIndex(columns, "anchorUtcTime");
-        var splitIndex = FindRequiredIndex(columns, "Split");
-        var modelIndex = FindRequiredIndex(columns, "Model");
+        var anchorIndex = CsvParsing.FindRequiredColumnIndex(columns, "anchorUtcTime", "predictions CSV");
+        var splitIndex = CsvParsing.FindRequiredColumnIndex(columns, "Split", "predictions CSV");
+        var modelIndex = CsvParsing.FindRequiredColumnIndex(columns, "Model", "predictions CSV");
         var predictedIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
-            .Select(step => FindRequiredIndex(columns, $"Pred_tPlus{step}"))
+            .Select(step => CsvParsing.FindRequiredColumnIndex(columns, $"Pred_tPlus{step}", "predictions CSV"))
             .ToArray();
 
         var seenKeys = new HashSet<(string ModelName, DateTime AnchorUtcTime, int HorizonStep)>();
@@ -867,22 +867,14 @@ public static class PartDiagnostics
                 throw new FormatException($"Invalid prediction row at line {lineNumber}: expected {columns.Length} columns.");
             }
 
-            if (!DateTime.TryParseExact(
-                    parts[anchorIndex],
-                    "yyyy-MM-dd HH:mm:ss",
-                    InvariantCulture,
-                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                    out var anchorUtcTime))
-            {
-                throw new FormatException($"Invalid anchorUtcTime at line {lineNumber}: '{parts[anchorIndex]}'.");
-            }
+            var anchorUtcTime = CsvParsing.ParseRequiredUtcDateTime(parts[anchorIndex], lineNumber, "anchorUtcTime");
 
             var split = parts[splitIndex];
             var modelName = parts[modelIndex];
 
             for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
-                var predicted = ParseRequiredDouble(parts[predictedIndexes[step - 1]], lineNumber, $"Pred_tPlus{step}");
+                var predicted = CsvParsing.ParseRequiredDouble(parts[predictedIndexes[step - 1]], lineNumber, $"Pred_tPlus{step}", rejectNonFinite: true);
                 var key = (modelName, anchorUtcTime, step);
                 if (!seenKeys.Add(key))
                 {
@@ -925,34 +917,6 @@ public static class PartDiagnostics
         }
 
         return points;
-    }
-
-    private static int FindRequiredIndex(IReadOnlyList<string> columns, string name)
-    {
-        for (var index = 0; index < columns.Count; index++)
-        {
-            if (string.Equals(columns[index], name, StringComparison.Ordinal))
-            {
-                return index;
-            }
-        }
-
-        throw new FormatException($"Missing required column '{name}' in predictions CSV.");
-    }
-
-    private static double ParseRequiredDouble(string value, int lineNumber, string columnName)
-    {
-        if (!double.TryParse(value, NumberStyles.Float, InvariantCulture, out var parsed))
-        {
-            throw new FormatException($"Invalid {columnName} at line {lineNumber}: '{value}'.");
-        }
-
-        if (!double.IsFinite(parsed))
-        {
-            throw new FormatException($"Invalid {columnName} at line {lineNumber}: non-finite value '{value}'.");
-        }
-
-        return parsed;
     }
 
     private static string NormalizeSplit(string split)

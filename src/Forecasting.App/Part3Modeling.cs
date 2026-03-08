@@ -432,10 +432,10 @@ public static class Part3Modeling
         var columns = header.Split(';');
         var requiredPart2Indexes = RequiredPart2BaseColumns.ToDictionary(
             name => name,
-            name => FindRequiredPart2ColumnIndex(columns, name, part2DatasetCsvPath),
+            name => CsvParsing.FindRequiredColumnIndex(columns, name, $"part2 supervised dataset '{part2DatasetCsvPath}'"),
             StringComparer.Ordinal);
         var horizonIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
-            .Select(step => FindRequiredPart2ColumnIndex(columns, $"Target_tPlus{step}", part2DatasetCsvPath))
+            .Select(step => CsvParsing.FindRequiredColumnIndex(columns, $"Target_tPlus{step}", $"part2 supervised dataset '{part2DatasetCsvPath}'"))
             .ToArray();
         var maxRequiredIndex = Math.Max(requiredPart2Indexes.Values.Max(), horizonIndexes.Length == 0 ? -1 : horizonIndexes.Max());
 
@@ -455,46 +455,38 @@ public static class Part3Modeling
                 throw new FormatException($"Invalid row at line {lineNumber}: expected at least {maxRequiredIndex + 1} columns.");
             }
 
-            if (!DateTime.TryParseExact(
-                    parts[requiredPart2Indexes["anchorUtcTime"]],
-                    "yyyy-MM-dd HH:mm:ss",
-                    InvariantCulture,
-                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                    out var anchorUtcTime))
-            {
-                throw new FormatException($"Invalid anchorUtcTime at line {lineNumber}: '{parts[requiredPart2Indexes["anchorUtcTime"]]}'.");
-            }
+            var anchorUtcTime = CsvParsing.ParseRequiredUtcDateTime(parts[requiredPart2Indexes["anchorUtcTime"]], lineNumber, "anchorUtcTime");
 
             var horizonTargets = new double[PipelineConstants.HorizonSteps];
             for (var step = 0; step < PipelineConstants.HorizonSteps; step++)
             {
-                horizonTargets[step] = ParseRequiredDouble(parts[horizonIndexes[step]], lineNumber, $"Target_tPlus{step + 1}");
+                horizonTargets[step] = CsvParsing.ParseRequiredDouble(parts[horizonIndexes[step]], lineNumber, $"Target_tPlus{step + 1}");
             }
 
             rows.Add(new Part3InputRow(
                 anchorUtcTime,
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetAtT)]], lineNumber, nameof(Part3InputRow.TargetAtT)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.Temperature)]], lineNumber, nameof(Part3InputRow.Temperature)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.Windspeed)]], lineNumber, nameof(Part3InputRow.Windspeed)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.SolarIrradiation)]], lineNumber, nameof(Part3InputRow.SolarIrradiation)),
-                ParseRequiredInt(parts[requiredPart2Indexes[nameof(Part3InputRow.HourOfDay)]], lineNumber, nameof(Part3InputRow.HourOfDay)),
-                ParseRequiredInt(parts[requiredPart2Indexes[nameof(Part3InputRow.MinuteOfHour)]], lineNumber, nameof(Part3InputRow.MinuteOfHour)),
-                ParseRequiredInt(parts[requiredPart2Indexes[nameof(Part3InputRow.DayOfWeek)]], lineNumber, nameof(Part3InputRow.DayOfWeek)),
-                ParseRequiredBool(parts[requiredPart2Indexes[nameof(Part3InputRow.IsHoliday)]], lineNumber, nameof(Part3InputRow.IsHoliday)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.HourSin)]], lineNumber, nameof(Part3InputRow.HourSin)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.HourCos)]], lineNumber, nameof(Part3InputRow.HourCos)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.WeekdaySin)]], lineNumber, nameof(Part3InputRow.WeekdaySin)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.WeekdayCos)]], lineNumber, nameof(Part3InputRow.WeekdayCos)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192)]], lineNumber, nameof(Part3InputRow.TargetLag192)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672)]], lineNumber, nameof(Part3InputRow.TargetLag672)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Mean16)]], lineNumber, nameof(Part3InputRow.TargetLag192Mean16)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Std16)]], lineNumber, nameof(Part3InputRow.TargetLag192Std16)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Mean96)]], lineNumber, nameof(Part3InputRow.TargetLag192Mean96)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Std96)]], lineNumber, nameof(Part3InputRow.TargetLag192Std96)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Mean16)]], lineNumber, nameof(Part3InputRow.TargetLag672Mean16)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Std16)]], lineNumber, nameof(Part3InputRow.TargetLag672Std16)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Mean96)]], lineNumber, nameof(Part3InputRow.TargetLag672Mean96)),
-                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Std96)]], lineNumber, nameof(Part3InputRow.TargetLag672Std96)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetAtT)]], lineNumber, nameof(Part3InputRow.TargetAtT)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.Temperature)]], lineNumber, nameof(Part3InputRow.Temperature)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.Windspeed)]], lineNumber, nameof(Part3InputRow.Windspeed)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.SolarIrradiation)]], lineNumber, nameof(Part3InputRow.SolarIrradiation)),
+                CsvParsing.ParseRequiredInt(parts[requiredPart2Indexes[nameof(Part3InputRow.HourOfDay)]], lineNumber, nameof(Part3InputRow.HourOfDay)),
+                CsvParsing.ParseRequiredInt(parts[requiredPart2Indexes[nameof(Part3InputRow.MinuteOfHour)]], lineNumber, nameof(Part3InputRow.MinuteOfHour)),
+                CsvParsing.ParseRequiredInt(parts[requiredPart2Indexes[nameof(Part3InputRow.DayOfWeek)]], lineNumber, nameof(Part3InputRow.DayOfWeek)),
+                CsvParsing.ParseRequiredBool(parts[requiredPart2Indexes[nameof(Part3InputRow.IsHoliday)]], lineNumber, nameof(Part3InputRow.IsHoliday)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.HourSin)]], lineNumber, nameof(Part3InputRow.HourSin)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.HourCos)]], lineNumber, nameof(Part3InputRow.HourCos)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.WeekdaySin)]], lineNumber, nameof(Part3InputRow.WeekdaySin)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.WeekdayCos)]], lineNumber, nameof(Part3InputRow.WeekdayCos)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192)]], lineNumber, nameof(Part3InputRow.TargetLag192)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672)]], lineNumber, nameof(Part3InputRow.TargetLag672)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Mean16)]], lineNumber, nameof(Part3InputRow.TargetLag192Mean16)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Std16)]], lineNumber, nameof(Part3InputRow.TargetLag192Std16)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Mean96)]], lineNumber, nameof(Part3InputRow.TargetLag192Mean96)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Std96)]], lineNumber, nameof(Part3InputRow.TargetLag192Std96)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Mean16)]], lineNumber, nameof(Part3InputRow.TargetLag672Mean16)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Std16)]], lineNumber, nameof(Part3InputRow.TargetLag672Std16)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Mean96)]], lineNumber, nameof(Part3InputRow.TargetLag672Mean96)),
+                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Std96)]], lineNumber, nameof(Part3InputRow.TargetLag672Std96)),
                 parts[requiredPart2Indexes["Split"]],
                 horizonTargets));
         }
@@ -698,15 +690,15 @@ public static class Part3Modeling
         }
 
         var columns = header.Split(';');
-        var anchorIndex = FindRequiredIndex(columns, "anchorUtcTime");
-        var splitIndex = FindRequiredIndex(columns, "Split");
-        var modelIndex = FindRequiredIndex(columns, "Model");
-        var fallbackIndex = FindRequiredIndex(columns, "ExogenousFallbackSteps");
+        var anchorIndex = CsvParsing.FindRequiredColumnIndex(columns, "anchorUtcTime", "forecasts CSV");
+        var splitIndex = CsvParsing.FindRequiredColumnIndex(columns, "Split", "forecasts CSV");
+        var modelIndex = CsvParsing.FindRequiredColumnIndex(columns, "Model", "forecasts CSV");
+        var fallbackIndex = CsvParsing.FindRequiredColumnIndex(columns, "ExogenousFallbackSteps", "forecasts CSV");
         var predictedIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
-            .Select(step => FindRequiredIndex(columns, $"Pred_tPlus{step}"))
+            .Select(step => CsvParsing.FindRequiredColumnIndex(columns, $"Pred_tPlus{step}", "forecasts CSV"))
             .ToArray();
         var actualIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
-            .Select(step => FindRequiredIndex(columns, $"Actual_tPlus{step}"))
+            .Select(step => CsvParsing.FindRequiredColumnIndex(columns, $"Actual_tPlus{step}", "forecasts CSV"))
             .ToArray();
 
         string? line;
@@ -725,29 +717,21 @@ public static class Part3Modeling
                 throw new FormatException($"Invalid forecast row at line {lineNumber}: expected {columns.Length} columns.");
             }
 
-            if (!DateTime.TryParseExact(
-                    parts[anchorIndex],
-                    "yyyy-MM-dd HH:mm:ss",
-                    InvariantCulture,
-                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                    out var anchorUtcTime))
-            {
-                throw new FormatException($"Invalid anchorUtcTime at line {lineNumber}: '{parts[anchorIndex]}'.");
-            }
+            var anchorUtcTime = CsvParsing.ParseRequiredUtcDateTime(parts[anchorIndex], lineNumber, "anchorUtcTime");
 
             var predicted = new double[PipelineConstants.HorizonSteps];
             var actual = new double[PipelineConstants.HorizonSteps];
             for (var step = 0; step < PipelineConstants.HorizonSteps; step++)
             {
-                predicted[step] = ParseRequiredDouble(parts[predictedIndexes[step]], lineNumber, $"Pred_tPlus{step + 1}");
-                actual[step] = ParseRequiredDouble(parts[actualIndexes[step]], lineNumber, $"Actual_tPlus{step + 1}");
+                predicted[step] = CsvParsing.ParseRequiredDouble(parts[predictedIndexes[step]], lineNumber, $"Pred_tPlus{step + 1}");
+                actual[step] = CsvParsing.ParseRequiredDouble(parts[actualIndexes[step]], lineNumber, $"Actual_tPlus{step + 1}");
             }
 
             rows.Add(new Part3ForecastRow(
                 anchorUtcTime,
                 parts[splitIndex],
                 parts[modelIndex],
-                ParseRequiredInt(parts[fallbackIndex], lineNumber, "ExogenousFallbackSteps"),
+                CsvParsing.ParseRequiredInt(parts[fallbackIndex], lineNumber, "ExogenousFallbackSteps"),
                 predicted,
                 actual));
         }
@@ -1149,59 +1133,4 @@ public static class Part3Modeling
         }
     }
 
-    private static double ParseRequiredDouble(string value, int lineNumber, string columnName)
-    {
-        if (!double.TryParse(value, NumberStyles.Float, InvariantCulture, out var parsed))
-        {
-            throw new FormatException($"Invalid {columnName} at line {lineNumber}: '{value}'.");
-        }
-
-        return parsed;
-    }
-
-    private static int ParseRequiredInt(string value, int lineNumber, string columnName)
-    {
-        if (!int.TryParse(value, NumberStyles.Integer, InvariantCulture, out var parsed))
-        {
-            throw new FormatException($"Invalid {columnName} at line {lineNumber}: '{value}'.");
-        }
-
-        return parsed;
-    }
-
-    private static bool ParseRequiredBool(string value, int lineNumber, string columnName)
-    {
-        if (!bool.TryParse(value, out var parsed))
-        {
-            throw new FormatException($"Invalid {columnName} at line {lineNumber}: '{value}'.");
-        }
-
-        return parsed;
-    }
-
-    private static int FindRequiredIndex(IReadOnlyList<string> columns, string name)
-    {
-        for (var index = 0; index < columns.Count; index++)
-        {
-            if (string.Equals(columns[index], name, StringComparison.Ordinal))
-            {
-                return index;
-            }
-        }
-
-        throw new FormatException($"Missing required column '{name}' in forecasts CSV.");
-    }
-
-    private static int FindRequiredPart2ColumnIndex(IReadOnlyList<string> columns, string name, string part2DatasetCsvPath)
-    {
-        for (var index = 0; index < columns.Count; index++)
-        {
-            if (string.Equals(columns[index], name, StringComparison.Ordinal))
-            {
-                return index;
-            }
-        }
-
-        throw new FormatException($"Missing required column '{name}' in part2 supervised dataset '{part2DatasetCsvPath}'.");
-    }
 }
