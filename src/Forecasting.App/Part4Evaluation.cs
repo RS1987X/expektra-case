@@ -30,8 +30,6 @@ public static class Part4Evaluation
 {
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
 
-    private sealed record ActualPoint(DateTime AnchorUtcTime, int HorizonStep, double Actual);
-
     public static Part4RunResult RunEvaluation(string part2InputCsvPath, string part3PredictionsCsvPath)
     {
         var part2Rows = Part3Modeling.ReadPart2DatasetCsv(part2InputCsvPath);
@@ -45,8 +43,7 @@ public static class Part4Evaluation
     {
         ValidateForecastRows(forecastRows);
 
-        var actualPoints = BuildValidationActualPoints(part2Rows);
-        var actualLookup = BuildActualLookup(actualPoints);
+        var actualLookup = BuildValidationActualLookup(part2Rows);
 
         var validationForecasts = forecastRows
             .Where(row => string.Equals(row.Split, "Validation", StringComparison.OrdinalIgnoreCase))
@@ -57,7 +54,7 @@ public static class Part4Evaluation
 
         return new Part4RunResult(
             DateTime.UtcNow,
-            actualPoints.Count,
+            actualLookup.Count * PipelineConstants.HorizonSteps,
             validationForecasts.Count * PipelineConstants.HorizonSteps,
             metrics,
             sample);
@@ -106,7 +103,7 @@ public static class Part4Evaluation
 
     private static List<Part4ModelMetrics> ComputeMetrics(
         IReadOnlyList<Part3ForecastRow> forecasts,
-        IReadOnlyDictionary<(DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyDictionary<DateTime, double[]> actualLookup)
     {
         var accumulators = new Dictionary<string, MetricsAccumulator>(StringComparer.Ordinal);
 
@@ -117,15 +114,16 @@ public static class Part4Evaluation
 
         foreach (var forecast in forecasts)
         {
+            if (!actualLookup.TryGetValue(forecast.AnchorUtcTime, out var actuals))
+            {
+                continue;
+            }
+
             var accumulator = accumulators[forecast.ModelName];
 
             for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
-                if (!actualLookup.TryGetValue((forecast.AnchorUtcTime, step), out var actual))
-                {
-                    continue;
-                }
-
+                var actual = actuals[step - 1];
                 var error = forecast.PredictedTargets[step - 1] - actual;
                 var absError = Math.Abs(error);
                 accumulator.EvaluatedPoints++;
@@ -177,20 +175,20 @@ public static class Part4Evaluation
 
     private static List<Part4SamplePoint> BuildDeterministicSample(
         IReadOnlyList<Part3ForecastRow> forecasts,
-        IReadOnlyDictionary<(DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyDictionary<DateTime, double[]> actualLookup)
     {
         var firstAnchor = forecasts
             .Select(row => row.AnchorUtcTime)
             .Distinct()
             .OrderBy(timestamp => timestamp)
-            .FirstOrDefault(anchor => Enumerable.Range(1, PipelineConstants.HorizonSteps)
-                .Any(step => actualLookup.ContainsKey((anchor, step))));
+            .FirstOrDefault(anchor => actualLookup.ContainsKey(anchor));
 
         if (firstAnchor == default)
         {
             return [];
         }
 
+        var actuals = actualLookup[firstAnchor];
         var sample = new List<Part4SamplePoint>();
 
         foreach (var forecast in forecasts
@@ -199,43 +197,22 @@ public static class Part4Evaluation
         {
             for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
-                if (!actualLookup.TryGetValue((forecast.AnchorUtcTime, step), out var actual))
-                {
-                    continue;
-                }
-
                 sample.Add(new Part4SamplePoint(
                     forecast.ModelName,
                     forecast.AnchorUtcTime,
                     forecast.AnchorUtcTime.AddMinutes(step * PipelineConstants.MinutesPerStep),
                     step,
                     forecast.PredictedTargets[step - 1],
-                    actual));
+                    actuals[step - 1]));
             }
         }
 
         return sample;
     }
 
-    private static Dictionary<(DateTime AnchorUtcTime, int HorizonStep), double> BuildActualLookup(IReadOnlyList<ActualPoint> points)
+    private static Dictionary<DateTime, double[]> BuildValidationActualLookup(IReadOnlyList<Part3InputRow> rows)
     {
-        var lookup = new Dictionary<(DateTime AnchorUtcTime, int HorizonStep), double>();
-        foreach (var point in points)
-        {
-            var key = (point.AnchorUtcTime, point.HorizonStep);
-            if (!lookup.TryAdd(key, point.Actual))
-            {
-                throw new InvalidOperationException(
-                    $"Duplicate ground-truth key for anchor '{point.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}' and horizon '{point.HorizonStep}'.");
-            }
-        }
-
-        return lookup;
-    }
-
-    private static List<ActualPoint> BuildValidationActualPoints(IReadOnlyList<Part3InputRow> rows)
-    {
-        var points = new List<ActualPoint>();
+        var lookup = new Dictionary<DateTime, double[]>();
         foreach (var row in rows)
         {
             if (!string.Equals(row.Split, "Validation", StringComparison.OrdinalIgnoreCase))
@@ -243,13 +220,14 @@ public static class Part4Evaluation
                 continue;
             }
 
-            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
+            if (!lookup.TryAdd(row.AnchorUtcTime, row.HorizonTargets.ToArray()))
             {
-                points.Add(new ActualPoint(row.AnchorUtcTime, step, row.HorizonTargets[step - 1]));
+                throw new InvalidOperationException(
+                    $"Duplicate ground-truth key for anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}'.");
             }
         }
 
-        return points;
+        return lookup;
     }
 
     private sealed class MetricsAccumulator

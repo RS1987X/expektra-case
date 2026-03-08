@@ -501,21 +501,17 @@ public static class PartDiagnostics
         return summaries;
     }
 
-    private static Dictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> BuildActualLookup(IReadOnlyList<Part3InputRow> rows)
+    private static Dictionary<(string Split, DateTime AnchorUtcTime), double[]> BuildActualLookup(IReadOnlyList<Part3InputRow> rows)
     {
-        var lookup = new Dictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double>();
+        var lookup = new Dictionary<(string Split, DateTime AnchorUtcTime), double[]>();
         foreach (var row in rows)
         {
             var split = NormalizeSplit(row.Split);
-
-            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
+            var key = (split, row.AnchorUtcTime);
+            if (!lookup.TryAdd(key, row.HorizonTargets.ToArray()))
             {
-                var key = (split, row.AnchorUtcTime, step);
-                if (!lookup.TryAdd(key, row.HorizonTargets[step - 1]))
-                {
-                    throw new InvalidOperationException(
-                        $"Duplicate ground-truth key for split '{split}', anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}', and horizon '{step}'.");
-                }
+                throw new InvalidOperationException(
+                    $"Duplicate ground-truth key for split '{split}', anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}'.");
             }
         }
 
@@ -524,28 +520,28 @@ public static class PartDiagnostics
 
     private static List<DiagnosticsResidualSummary> BuildResidualSummaries(
         IReadOnlyList<Part3ForecastRow> forecasts,
-        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime), double[]> actualLookup)
     {
         var stats = new Dictionary<(string ModelName, string Split), RunningStats>(new ModelSplitComparer());
         foreach (var forecast in forecasts)
         {
             var split = NormalizeSplit(forecast.Split);
+            if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime), out var actuals))
+            {
+                continue;
+            }
+
             var key = (forecast.ModelName, split);
 
             for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
-                if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime, step), out var actual))
-                {
-                    continue;
-                }
-
                 if (!stats.TryGetValue(key, out var running))
                 {
                     running = new RunningStats();
                     stats[key] = running;
                 }
 
-                running.Add(forecast.PredictedTargets[step - 1] - actual);
+                running.Add(forecast.PredictedTargets[step - 1] - actuals[step - 1]);
             }
         }
 
@@ -558,20 +554,19 @@ public static class PartDiagnostics
 
     private static List<DiagnosticsHorizonBucketSummary> BuildHorizonBucketSummaries(
         IReadOnlyList<Part3ForecastRow> forecasts,
-        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime), double[]> actualLookup)
     {
         var stats = new Dictionary<(string ModelName, string Split, int BucketStart), RunningStats>(new ModelSplitBucketComparer());
         foreach (var forecast in forecasts)
         {
             var split = NormalizeSplit(forecast.Split);
+            if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime), out var actuals))
+            {
+                continue;
+            }
 
             for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
-                if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime, step), out var actual))
-                {
-                    continue;
-                }
-
                 var bucketStart = ((step - 1) / HorizonBucketSize) * HorizonBucketSize + 1;
                 var key = (forecast.ModelName, split, bucketStart);
                 if (!stats.TryGetValue(key, out var running))
@@ -580,7 +575,7 @@ public static class PartDiagnostics
                     stats[key] = running;
                 }
 
-                running.Add(forecast.PredictedTargets[step - 1] - actual);
+                running.Add(forecast.PredictedTargets[step - 1] - actuals[step - 1]);
             }
         }
 
@@ -609,7 +604,7 @@ public static class PartDiagnostics
 
     private static List<DiagnosticsHorizonStepSummary> BuildValidationHorizonSummaries(
         IReadOnlyList<Part3ForecastRow> forecasts,
-        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime), double[]> actualLookup)
     {
         var stats = new Dictionary<(string ModelName, int HorizonStep), RunningStats>();
 
@@ -626,13 +621,13 @@ public static class PartDiagnostics
                 continue;
             }
 
+            if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime), out var actuals))
+            {
+                continue;
+            }
+
             for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
-                if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime, step), out var actual))
-                {
-                    continue;
-                }
-
                 var key = (forecast.ModelName, step);
                 if (!stats.TryGetValue(key, out var running))
                 {
@@ -640,7 +635,7 @@ public static class PartDiagnostics
                     stats[key] = running;
                 }
 
-                running.Add(forecast.PredictedTargets[step - 1] - actual);
+                running.Add(forecast.PredictedTargets[step - 1] - actuals[step - 1]);
             }
         }
 
@@ -665,7 +660,7 @@ public static class PartDiagnostics
 
     private static List<DiagnosticsSamplePoint> BuildSamplePoints(
         IReadOnlyList<Part3ForecastRow> forecasts,
-        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime), double[]> actualLookup)
     {
         var selectedAnchors = forecasts
             .GroupBy(f => NormalizeSplit(f.Split), StringComparer.Ordinal)
@@ -676,8 +671,7 @@ public static class PartDiagnostics
                     .Select(f => f.AnchorUtcTime)
                     .Distinct()
                     .OrderBy(anchor => anchor)
-                    .Where(anchor => Enumerable.Range(1, PipelineConstants.HorizonSteps)
-                        .Any(step => actualLookup.ContainsKey((split, anchor, step))))
+                    .Where(anchor => actualLookup.ContainsKey((split, anchor)))
                     .Take(SampleAnchors)
                     .Select(anchor => (Split: split, AnchorUtcTime: anchor));
             })
@@ -691,13 +685,13 @@ public static class PartDiagnostics
                      .ThenBy(f => f.ModelName, StringComparer.Ordinal))
         {
             var split = NormalizeSplit(forecast.Split);
+            if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime), out var actuals))
+            {
+                continue;
+            }
+
             for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
-                if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime, step), out var actual))
-                {
-                    continue;
-                }
-
                 sample.Add(new DiagnosticsSamplePoint(
                     forecast.ModelName,
                     split,
@@ -705,8 +699,8 @@ public static class PartDiagnostics
                     forecast.AnchorUtcTime.AddMinutes(step * PipelineConstants.MinutesPerStep),
                     step,
                     forecast.PredictedTargets[step - 1],
-                    actual,
-                    forecast.PredictedTargets[step - 1] - actual));
+                    actuals[step - 1],
+                    forecast.PredictedTargets[step - 1] - actuals[step - 1]));
             }
         }
 
@@ -715,7 +709,7 @@ public static class PartDiagnostics
 
     private static List<DiagnosticsOverlayPoint> BuildOverlayPoints(
         IReadOnlyList<Part3ForecastRow> forecasts,
-        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime), double[]> actualLookup)
     {
         var overlays = new List<DiagnosticsOverlayPoint>();
 
@@ -723,20 +717,20 @@ public static class PartDiagnostics
                      string.Equals(f.ModelName, OverlayModelName, StringComparison.Ordinal)))
         {
             var split = NormalizeSplit(forecast.Split);
+            if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime), out var actuals))
+            {
+                continue;
+            }
+
             foreach (var step in OverlayHorizonSteps)
             {
-                if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime, step), out var actual))
-                {
-                    continue;
-                }
-
                 overlays.Add(new DiagnosticsOverlayPoint(
                     split,
                     forecast.ModelName,
                     step,
                     forecast.AnchorUtcTime.AddMinutes(step * PipelineConstants.MinutesPerStep),
                     forecast.PredictedTargets[step - 1],
-                    actual));
+                    actuals[step - 1]));
             }
         }
 
