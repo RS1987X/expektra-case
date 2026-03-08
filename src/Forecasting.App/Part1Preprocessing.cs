@@ -104,6 +104,7 @@ public static class Part1Preprocessing
         string holidaysCsvPath,
         int validationWindowDays = PipelineConstants.DefaultValidationWindowDays)
     {
+        // Guardrail: reject invalid config early to avoid ambiguous split behavior.
         if (validationWindowDays <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(validationWindowDays), "Validation window days must be greater than zero.");
@@ -114,6 +115,7 @@ public static class Part1Preprocessing
         rawRows = CollectionHelpers.DeduplicateByKeyKeepLast(rawRows, row => row.UtcTime, out var droppedDuplicateTimestampRows);
         if (rawRows.Count == 0)
         {
+            // Robust empty-input handling: return explicit empty artifacts instead of failing downstream.
             var emptySummary = new PreprocessingAuditSummary(DateTime.MinValue, 0, 0, 0, 0, 0, 0, 0);
             return new PreprocessedDataset([], [], emptySummary);
         }
@@ -207,16 +209,19 @@ public static class Part1Preprocessing
             var parts = line.Split(';');
             if (parts.Length < 7)
             {
+                // Robustness: tolerate malformed holiday rows instead of failing full preprocessing.
                 continue;
             }
 
             if (!string.Equals(parts[1], "SE", StringComparison.OrdinalIgnoreCase))
             {
+                // Keep ingestion scoped to Swedish holidays only.
                 continue;
             }
 
             if (!DateOnly.TryParseExact(parts[2], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
             {
+                // Robustness: ignore invalid holiday dates and continue.
                 continue;
             }
 
@@ -292,12 +297,14 @@ public static class Part1Preprocessing
             lineNumber++;
             if (string.IsNullOrWhiteSpace(line))
             {
+                // Robustness: tolerate blank lines in source CSV.
                 continue;
             }
 
             var parts = line.Split(';');
             if (parts.Length < 5)
             {
+                // Fail fast when required raw-data columns are missing.
                 throw new FormatException($"Invalid row at line {lineNumber}: expected at least 5 columns.");
             }
 
@@ -308,11 +315,13 @@ public static class Part1Preprocessing
                     DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
                     out var utcTime))
             {
+                // Strict timestamp parsing prevents locale/date-format ambiguities.
                 throw new FormatException($"Invalid utcTime at line {lineNumber}: '{parts[0]}'.");
             }
 
             if (utcTime.Second != 0 || utcTime.Minute % PipelineConstants.MinutesPerStep != 0)
             {
+                // Guardrail: enforce pipeline cadence alignment (15-minute steps) at ingestion time.
                 throw new FormatException(
                     $"Invalid utcTime at line {lineNumber}: '{parts[0]}' is not cadence-aligned to {PipelineConstants.MinutesPerStep}-minute steps.");
             }
@@ -424,6 +433,7 @@ public static class Part1Preprocessing
         {
             if (!seedFromPriorSegment)
             {
+                // Guardrail: required numeric series must contain at least one observed value.
                 throw new InvalidOperationException($"{columnName} column has no valid values to forward-fill.");
             }
 
@@ -466,6 +476,7 @@ public static class Part1Preprocessing
         var hasObservedValueBeforeValidation = rows.Any(row => row.UtcTime < validationStartUtc && selector(row).HasValue);
         if (!hasObservedValueBeforeValidation)
         {
+            // Leakage/safety guard: validation cannot rely on a series with zero pre-validation observations.
             throw new InvalidOperationException(
                 $"{columnName} has no observed values before validation start ({validationStartUtc:yyyy-MM-dd HH:mm:ss} UTC).");
         }
@@ -475,16 +486,19 @@ public static class Part1Preprocessing
     {
         if (string.IsNullOrWhiteSpace(value))
         {
+            // Empty cells are treated as missing and handled by forward-fill logic.
             return null;
         }
 
         if (!double.TryParse(value, NumberStyles.Float, SwedishCulture, out var parsed))
         {
+            // Strict numeric parsing with expected source locale.
             throw new FormatException($"Invalid {columnName} at line {lineNumber}: '{value}'.");
         }
 
         if (!double.IsFinite(parsed))
         {
+            // Reject NaN/Infinity early to prevent non-finite values propagating into features/models.
             throw new FormatException($"Invalid {columnName} at line {lineNumber}: non-finite value '{value}'.");
         }
 
