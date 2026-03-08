@@ -482,7 +482,7 @@ public static class PipelineRunner
         };
 
         var outputPath = Path.Combine(outputDirectory, "run_manifest.json");
-        var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
+        var json = JsonSerializer.Serialize(manifest, FileOutput.IndentedJsonOptions);
         File.WriteAllText(outputPath, json);
     }
 

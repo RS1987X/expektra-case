@@ -522,7 +522,7 @@ public static class PartDiagnostics
         IReadOnlyList<Part3ForecastRow> forecasts,
         IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime), double[]> actualLookup)
     {
-        var stats = new Dictionary<(string ModelName, string Split), RunningStats>(new ModelSplitComparer());
+        var stats = new Dictionary<(string ModelName, string Split), RunningStats>();
         foreach (var forecast in forecasts)
         {
             var split = NormalizeSplit(forecast.Split);
@@ -556,7 +556,7 @@ public static class PartDiagnostics
         IReadOnlyList<Part3ForecastRow> forecasts,
         IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime), double[]> actualLookup)
     {
-        var stats = new Dictionary<(string ModelName, string Split, int BucketStart), RunningStats>(new ModelSplitBucketComparer());
+        var stats = new Dictionary<(string ModelName, string Split, int BucketStart), RunningStats>();
         foreach (var forecast in forecasts)
         {
             var split = NormalizeSplit(forecast.Split);
@@ -1223,29 +1223,46 @@ public static class PartDiagnostics
     {
         var results = new List<Part3PfiFeatureResult>();
         using var reader = new StreamReader(csvPath);
-        var header = reader.ReadLine(); // skip header
+        var header = reader.ReadLine();
+        if (string.IsNullOrWhiteSpace(header))
+        {
+            return results;
+        }
+
+        var columns = header.Split(';');
+        var rankIndex = CsvParsing.FindRequiredColumnIndex(columns, "Rank", "PFI CSV");
+        var nameIndex = CsvParsing.FindRequiredColumnIndex(columns, "FeatureName", "PFI CSV");
+        var maeDeltaIndex = CsvParsing.FindRequiredColumnIndex(columns, "MaeDelta", "PFI CSV");
+        var maeStdIndex = CsvParsing.FindRequiredColumnIndex(columns, "MaeDeltaStdDev", "PFI CSV");
+        var rmseDeltaIndex = CsvParsing.FindRequiredColumnIndex(columns, "RmseDelta", "PFI CSV");
+        var rmseStdIndex = CsvParsing.FindRequiredColumnIndex(columns, "RmseDeltaStdDev", "PFI CSV");
+        var r2DeltaIndex = CsvParsing.FindRequiredColumnIndex(columns, "R2Delta", "PFI CSV");
+        var r2StdIndex = CsvParsing.FindRequiredColumnIndex(columns, "R2DeltaStdDev", "PFI CSV");
+
+        var lineNumber = 1;
         while (reader.ReadLine() is { } line)
         {
+            lineNumber++;
             if (string.IsNullOrWhiteSpace(line))
             {
                 continue;
             }
 
             var parts = line.Split(';');
-            if (parts.Length < 8)
+            if (parts.Length < columns.Length)
             {
-                continue;
+                throw new FormatException($"Invalid PFI row at line {lineNumber}: expected {columns.Length} columns.");
             }
 
             results.Add(new Part3PfiFeatureResult(
-                int.Parse(parts[0], InvariantCulture),
-                parts[1],
-                double.Parse(parts[2], InvariantCulture),
-                double.Parse(parts[3], InvariantCulture),
-                double.Parse(parts[4], InvariantCulture),
-                double.Parse(parts[5], InvariantCulture),
-                double.Parse(parts[6], InvariantCulture),
-                double.Parse(parts[7], InvariantCulture)));
+                CsvParsing.ParseRequiredInt(parts[rankIndex], lineNumber, "Rank"),
+                parts[nameIndex],
+                CsvParsing.ParseRequiredDouble(parts[maeDeltaIndex], lineNumber, "MaeDelta"),
+                CsvParsing.ParseRequiredDouble(parts[maeStdIndex], lineNumber, "MaeDeltaStdDev"),
+                CsvParsing.ParseRequiredDouble(parts[rmseDeltaIndex], lineNumber, "RmseDelta"),
+                CsvParsing.ParseRequiredDouble(parts[rmseStdIndex], lineNumber, "RmseDeltaStdDev"),
+                CsvParsing.ParseRequiredDouble(parts[r2DeltaIndex], lineNumber, "R2Delta"),
+                CsvParsing.ParseRequiredDouble(parts[r2StdIndex], lineNumber, "R2DeltaStdDev")));
         }
 
         return results;
@@ -1494,32 +1511,4 @@ public static class PartDiagnostics
         return new string(chars);
     }
 
-    private sealed class ModelSplitComparer : IEqualityComparer<(string ModelName, string Split)>
-    {
-        public bool Equals((string ModelName, string Split) x, (string ModelName, string Split) y)
-        {
-            return string.Equals(x.ModelName, y.ModelName, StringComparison.Ordinal)
-                   && string.Equals(x.Split, y.Split, StringComparison.Ordinal);
-        }
-
-        public int GetHashCode((string ModelName, string Split) obj)
-        {
-            return HashCode.Combine(obj.ModelName, obj.Split);
-        }
-    }
-
-    private sealed class ModelSplitBucketComparer : IEqualityComparer<(string ModelName, string Split, int BucketStart)>
-    {
-        public bool Equals((string ModelName, string Split, int BucketStart) x, (string ModelName, string Split, int BucketStart) y)
-        {
-            return string.Equals(x.ModelName, y.ModelName, StringComparison.Ordinal)
-                   && string.Equals(x.Split, y.Split, StringComparison.Ordinal)
-                   && x.BucketStart == y.BucketStart;
-        }
-
-        public int GetHashCode((string ModelName, string Split, int BucketStart) obj)
-        {
-            return HashCode.Combine(obj.ModelName, obj.Split, obj.BucketStart);
-        }
-    }
 }
