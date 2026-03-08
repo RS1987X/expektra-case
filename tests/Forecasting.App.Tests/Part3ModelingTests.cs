@@ -186,6 +186,92 @@ public class Part3ModelingTests
     }
 
     [Fact]
+    public void RunModels_BaselineAllMissingKeys_UsesGlobalMeanForEntireHorizon()
+    {
+        var trainRows = new List<Part2SupervisedRow>
+        {
+            // Saturday keys only; validation horizon below spans Mon->Wed, so all keys miss.
+            CreateOracleRow(new DateTime(2024, 1, 6, 0, 0, 0, DateTimeKind.Utc), targetAtT: 10.0, temperature: 1.0, split: "Train"),
+            CreateOracleRow(new DateTime(2024, 1, 6, 12, 0, 0, DateTimeKind.Utc), targetAtT: 20.0, temperature: 1.0, split: "Train")
+        };
+
+        var validationAnchor = CreateOracleRow(
+            new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            targetAtT: 30.0,
+            temperature: 1.0,
+            split: "Validation");
+
+        var rows = trainRows.Concat([validationAnchor]).ToList();
+        var result = Part3Modeling.RunModels(rows);
+
+        var baseline = Assert.Single(result.Forecasts.Where(f =>
+            f.ModelName == "BaselineSeasonal" &&
+            f.AnchorUtcTime == validationAnchor.AnchorUtcTime &&
+            f.Split == "Validation"));
+
+        var expectedGlobalMean = trainRows.Average(row => row.TargetAtT);
+        Assert.Equal(PipelineConstants.HorizonSteps, baseline.ExogenousFallbackSteps);
+        Assert.All(baseline.PredictedTargets, value => Assert.Equal(expectedGlobalMean, value, 8));
+    }
+
+    [Fact]
+    public void RunModels_BaselineUsesExactSeasonalKeyMean_WhenKeyExists()
+    {
+        var trainRows = new List<Part2SupervisedRow>
+        {
+            // Step 1 from anchor below is Tuesday 00:15; this key mean should be used.
+            CreateOracleRow(new DateTime(2024, 1, 2, 0, 15, 0, DateTimeKind.Utc), targetAtT: 10.0, temperature: 1.0, split: "Train"),
+            CreateOracleRow(new DateTime(2024, 1, 9, 0, 15, 0, DateTimeKind.Utc), targetAtT: 14.0, temperature: 1.0, split: "Train")
+        };
+
+        var validationAnchor = CreateOracleRow(
+            new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            targetAtT: 50.0,
+            temperature: 1.0,
+            split: "Validation");
+
+        var rows = trainRows.Concat([validationAnchor]).ToList();
+        var result = Part3Modeling.RunModels(rows);
+
+        var baseline = Assert.Single(result.Forecasts.Where(f =>
+            f.ModelName == "BaselineSeasonal" &&
+            f.AnchorUtcTime == validationAnchor.AnchorUtcTime &&
+            f.Split == "Validation"));
+
+        Assert.Equal(12.0, baseline.PredictedTargets[0], 8);
+    }
+
+    [Fact]
+    public void RunModels_BaselineStepOneUsesNextTimestampKey_AcrossMidnightBoundary()
+    {
+        var trainRows = new List<Part2SupervisedRow>
+        {
+            // Tuesday 00:00 key mean is 42 and should be used for step 1.
+            CreateOracleRow(new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc), targetAtT: 40.0, temperature: 1.0, split: "Train"),
+            CreateOracleRow(new DateTime(2024, 1, 9, 0, 0, 0, DateTimeKind.Utc), targetAtT: 44.0, temperature: 1.0, split: "Train"),
+            // Distractor at anchor clock time (Monday 23:45) should not be used for step 1.
+            CreateOracleRow(new DateTime(2024, 1, 1, 23, 45, 0, DateTimeKind.Utc), targetAtT: 999.0, temperature: 1.0, split: "Train")
+        };
+
+        var validationAnchor = CreateOracleRow(
+            new DateTime(2024, 1, 1, 23, 45, 0, DateTimeKind.Utc),
+            targetAtT: 50.0,
+            temperature: 1.0,
+            split: "Validation");
+
+        var rows = trainRows.Concat([validationAnchor]).ToList();
+        var result = Part3Modeling.RunModels(rows);
+
+        var baseline = Assert.Single(result.Forecasts.Where(f =>
+            f.ModelName == "BaselineSeasonal" &&
+            f.AnchorUtcTime == validationAnchor.AnchorUtcTime &&
+            f.Split == "Validation"));
+
+        Assert.Equal(42.0, baseline.PredictedTargets[0], 8);
+        Assert.NotEqual(999.0, baseline.PredictedTargets[0]);
+    }
+
+    [Fact]
     public void RunModels_FastTreeProducesFiniteFullHorizonPredictions()
     {
         var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 4);
