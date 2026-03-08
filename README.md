@@ -63,7 +63,7 @@ Skälet till dessa val var att få en tydlig trade-off mellan enkel tolkbar refe
 - BaselineSeasonal: MAE 9273.88, RMSE 11361.91, MAPE 17.95
 - FastTreeRecursive: MAE 2270.13, RMSE 3215.10, MAPE 4.56
 
-### 2. Vilka features visade sig viktigast (eller bedoms vara viktigast) och hur motiverar du det?
+### 2. Vilka features visade sig viktigast (eller bedöms vara viktigast) och hur motiverar du det?
 Jag har inte kört explicit feature-importance-export i denna version, men utifrån problemtyp och resultat bedömer jag följande som viktigast:
 - `TargetLag192` och `TargetLag672`: fångar stark dygns- och veckosäsong i energiförbrukning.
 - Rullande statistik (`TargetMean16/96`, `TargetStd16/96`): ger lokal nivå och volatilitet, vilket hjälper modellen att anpassa sig till kortsiktiga regimskiften.
@@ -71,17 +71,15 @@ Jag har inte kört explicit feature-importance-export i denna version, men utifr
 - Exogena features (`Temperature`, `Windspeed`, `SolarIrradiation`): viktiga framför allt under väderkansliga perioder, men ofta sekundara till laggar i kort horisont. Temperature fångar även tid på året dynamiken som syns tydligt på en plot över target över tid.
 
 ### 3. Vad skulle du göra annorlunda eller lägga till med mer tid?
-- Köra tidsserie-CV med flera rullande foldar (inte bara en valideringssplit).
-- Införa 3-way split (Train/Validation/Holdout): använda Validation för hyperparameter-tuning och feature selection, och en separat Holdout för slutlig och opartisk utvärdering.
+- Köra tidsserie-CV med flera rullande foldar. Kan behöva rensa ut valideringspunker i slutet av varje fold baserat på pga rullande features då.
+- Införa 3-way split (Train/Validation/Holdout): använda Validation för hyperparameter-tuning och feature selection, och en separat Holdout för slutlig och utvärdering.
 - Träna om en reducerad modell efter feature importance/feature selection och jämföra den mot full modell samt baseline på Holdout.
-- Hyperparamter-tuning for FastTree samt jämforelse mot direct multi-step strategi.
-- Hantera framtida exogena variabler mer explicit (prognoser/scenarier) i stället för fallback där data saknas.
+- Modellera och prediktera exogena variabler för att kunna rulla fram dessa i rekursiva loopen också 
 - Lägga till probabilistiska prognoser (prediktionsintervall), inte bara punktprognos.
 - Performance profiling
-- Implementera preprocessing och fallback lineage trace
 
 ### 4. Hur skulle du hantera konceptdrift?
-Jag skulle kombinera overvaking, snabb detektion och kontrollerad omträning:
+Kombinera oöervaking, snabb detektion och kontrollerad omträning:
 - Övervaka live-MAE/RMSE/MAPE per tidsfack (timme, veckodag, säsong) och residualers bias.
 - Sätta trösklar för driftlarm
 - Omträna på rullande fönster enligt schema eller eventdrivet vid driftlarm.

@@ -213,6 +213,166 @@ public class Part3ModelingTests
     }
 
     [Fact]
+    public void PredictWithRecursiveOracle_FeedsPriorPredictionsBackIntoLaterSteps()
+    {
+        var anchorTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var rows = new List<Part2SupervisedRow>
+        {
+            CreateOracleRow(anchorTime, targetAtT: 10.0, temperature: 1.0),
+            CreateOracleRow(anchorTime.AddMinutes(15), targetAtT: 999.0, temperature: 2.0),
+            CreateOracleRow(anchorTime.AddMinutes(30), targetAtT: 5000.0, temperature: 4.0),
+            CreateOracleRow(anchorTime.AddMinutes(45), targetAtT: -1234.0, temperature: 8.0)
+        };
+
+        var result = Part3Modeling.PredictWithRecursiveOracle(
+            rows[0],
+            rows,
+            snapshot => snapshot.TargetAtT + snapshot.Temperature);
+
+        Assert.Equal(PipelineConstants.HorizonSteps, result.Predictions.Length);
+        Assert.Equal(191, result.RecursiveStepsBeyondAnchor);
+
+        // Future realized temperatures must not leak into the recursive loop.
+        AssertPredictionPrefix(result.Predictions, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0);
+    }
+
+    [Fact]
+    public void PredictWithRecursiveOracle_FreezesExogenousValuesAtAnchorTime()
+    {
+        var anchorTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var rows = new List<Part2SupervisedRow>
+        {
+            CreateOracleRow(anchorTime, targetAtT: 10.0, temperature: 1.0),
+            CreateOracleRow(anchorTime.AddMinutes(15), targetAtT: 20.0, temperature: 2.0),
+            CreateOracleRow(anchorTime.AddMinutes(30), targetAtT: 30.0, temperature: 4.0),
+            CreateOracleRow(anchorTime.AddMinutes(45), targetAtT: 40.0, temperature: 8.0)
+        };
+
+        var result = Part3Modeling.PredictWithRecursiveOracle(
+            rows[0],
+            rows,
+            snapshot => snapshot.Temperature);
+
+        Assert.Equal(PipelineConstants.HorizonSteps, result.Predictions.Length);
+        Assert.Equal(191, result.RecursiveStepsBeyondAnchor);
+
+        AssertPredictionPrefix(result.Predictions, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
+    }
+
+    [Fact]
+    public void PredictWithRecursiveOracle_AllowsHolidayCalendarContextWithoutUsingFutureRealizedExogenousValues()
+    {
+        var anchorTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var rows = new List<Part2SupervisedRow>
+        {
+            CreateOracleRow(anchorTime, targetAtT: 10.0, temperature: 1.0, split: "Validation"),
+            CreateOracleRow(anchorTime.AddMinutes(15), targetAtT: 20.0, temperature: 99.0, split: "Validation") with { IsHoliday = true },
+            CreateOracleRow(anchorTime.AddMinutes(30), targetAtT: 30.0, temperature: 77.0, split: "Validation"),
+            CreateOracleRow(anchorTime.AddMinutes(45), targetAtT: 40.0, temperature: 55.0, split: "Validation")
+        };
+
+        var result = Part3Modeling.PredictWithRecursiveOracle(
+            rows[0],
+            rows,
+            snapshot => snapshot.IsHoliday ? 100.0 + snapshot.Temperature : snapshot.Temperature);
+
+        AssertPredictionPrefix(result.Predictions, 1.0, 101.0, 1.0, 1.0);
+    }
+
+    [Fact]
+    public void PredictWithRecursiveOracle_RollsCalendarTimeFeaturesForwardAcrossSteps()
+    {
+        var anchorTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var rows = new List<Part2SupervisedRow>
+        {
+            CreateOracleRow(anchorTime, targetAtT: 10.0, temperature: 1.0, split: "Validation"),
+            CreateOracleRow(anchorTime.AddMinutes(15), targetAtT: 20.0, temperature: 99.0, split: "Validation"),
+            CreateOracleRow(anchorTime.AddMinutes(30), targetAtT: 30.0, temperature: 77.0, split: "Validation"),
+            CreateOracleRow(anchorTime.AddMinutes(45), targetAtT: 40.0, temperature: 55.0, split: "Validation")
+        };
+
+        var result = Part3Modeling.PredictWithRecursiveOracle(
+            rows[0],
+            rows,
+            snapshot => (snapshot.DayOfWeek * 10000.0) + (snapshot.HourOfDay * 100.0) + snapshot.MinuteOfHour);
+
+        AssertPredictionPrefix(result.Predictions, 10000.0, 10015.0, 10030.0, 10045.0);
+    }
+
+    [Fact]
+    public void PredictWithRecursiveOracle_SortsHistoryAndUsesLastDuplicateAtSameTimestamp()
+    {
+        var anchorTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var anchor = CreateOracleRow(anchorTime, targetAtT: 10.0, temperature: 1.0, split: "Validation");
+
+        var rows = new List<Part2SupervisedRow>
+        {
+            // Intentionally unsorted: history is expected to be sorted before recursive reads.
+            CreateOracleRow(anchorTime.AddMinutes(15), targetAtT: 999.0, temperature: 2.0, split: "Validation"),
+            anchor,
+            CreateOracleRow(anchorTime.AddMinutes(-15), targetAtT: 5.0, temperature: 3.0, split: "Validation"),
+            // Duplicate timestamp for anchor; last duplicate should win in row/history dictionaries.
+            CreateOracleRow(anchorTime, targetAtT: 20.0, temperature: 4.0, split: "Validation") with { IsHoliday = true }
+        };
+
+        var result = Part3Modeling.PredictWithRecursiveOracle(
+            anchor,
+            rows,
+            snapshot => snapshot.TargetAtT + (snapshot.IsHoliday ? 1000.0 : 0.0));
+
+        // Step 1 reads the deduplicated anchor-time value (20) and holiday context from the last duplicate.
+        // Step 2 then recurses on step 1 prediction fed back at t+1.
+        AssertPredictionPrefix(result.Predictions, 1020.0, 1020.0, 1020.0);
+    }
+
+    [Fact]
+    public void PredictWithRecursiveOracle_TargetLag192AdvancesAcrossHistoryTimeline()
+    {
+        var anchorTime = new DateTime(2024, 1, 3, 0, 0, 0, DateTimeKind.Utc);
+        var start = anchorTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep);
+        var rows = new List<Part2SupervisedRow>(FeatureConfig.TargetLag192 + 1);
+
+        for (var i = 0; i <= FeatureConfig.TargetLag192; i++)
+        {
+            var ts = start.AddMinutes(i * PipelineConstants.MinutesPerStep);
+            rows.Add(CreateOracleRow(ts, targetAtT: 1000.0 + i, temperature: 1.0, split: "Validation"));
+        }
+
+        var anchor = rows[^1];
+        var result = Part3Modeling.PredictWithRecursiveOracle(
+            anchor,
+            rows,
+            snapshot => snapshot.TargetLag192);
+
+        // At step k, lag-192 should walk forward one slot in historical timeline.
+        AssertPredictionPrefix(result.Predictions, 1000.0, 1001.0, 1002.0, 1003.0, 1004.0);
+    }
+
+    [Fact]
+    public void PredictWithRecursiveOracle_FiniteGuardPatternPreventsNaNPropagation()
+    {
+        var anchorTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var rows = new List<Part2SupervisedRow>
+        {
+            CreateOracleRow(anchorTime, targetAtT: 10.0, temperature: 1.0),
+            CreateOracleRow(anchorTime.AddMinutes(15), targetAtT: 20.0, temperature: 2.0),
+            CreateOracleRow(anchorTime.AddMinutes(30), targetAtT: 30.0, temperature: 3.0)
+        };
+
+        var result = Part3Modeling.PredictWithRecursiveOracle(
+            rows[0],
+            rows,
+            snapshot =>
+            {
+                var nonFiniteScore = double.NaN;
+                // Mirror production scorer guard: fallback to current recursive target when score is invalid.
+                return double.IsFinite(nonFiniteScore) ? nonFiniteScore : snapshot.TargetAtT;
+            });
+
+        AssertPredictionPrefix(result.Predictions, 10.0, 10.0, 10.0, 10.0);
+    }
+
+    [Fact]
     public void RunModels_SummaryModelsMatchForecastModelSet()
     {
         var rows = BuildSyntheticPart3Rows(trainCount: 120, validationCount: 8);
@@ -494,6 +654,58 @@ public class Part3ModelingTests
         }
 
         return rows;
+    }
+
+    private static Part2SupervisedRow CreateOracleRow(
+        DateTime anchorUtcTime,
+        double targetAtT,
+        double temperature,
+        double windspeed = 0.0,
+        double solarIrradiation = 0.0,
+        string split = "Train")
+    {
+        var hour = anchorUtcTime.Hour;
+        var minute = anchorUtcTime.Minute;
+        var dayOfWeek = (int)anchorUtcTime.DayOfWeek;
+        var hourAngle = 2d * Math.PI * (hour / 24d);
+        var weekdayAngle = 2d * Math.PI * (dayOfWeek / 7d);
+
+        return new Part2SupervisedRow(
+            anchorUtcTime,
+            targetAtT,
+            temperature,
+            windspeed,
+            solarIrradiation,
+            hour,
+            minute,
+            dayOfWeek,
+            false,
+            Math.Sin(hourAngle),
+            Math.Cos(hourAngle),
+            Math.Sin(weekdayAngle),
+            Math.Cos(weekdayAngle),
+            targetAtT - 1.0,
+            targetAtT - 2.0,
+            targetAtT - 0.5,
+            0.2,
+            targetAtT - 1.0,
+            0.4,
+            targetAtT - 2.5,
+            0.3,
+            targetAtT - 3.0,
+            0.5,
+            split,
+            Enumerable.Repeat(targetAtT, PipelineConstants.HorizonSteps).ToArray());
+    }
+
+    private static void AssertPredictionPrefix(IReadOnlyList<double> predictions, params double[] expectedPrefix)
+    {
+        Assert.True(predictions.Count >= expectedPrefix.Length);
+
+        for (var index = 0; index < expectedPrefix.Length; index++)
+        {
+            Assert.Equal(expectedPrefix[index], predictions[index], 8);
+        }
     }
 
     private static string CreatePart3CsvWithData(string row, bool includeBlankLine = false)
