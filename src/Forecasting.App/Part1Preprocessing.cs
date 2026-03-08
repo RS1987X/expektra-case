@@ -275,7 +275,7 @@ public static class Part1Preprocessing
     {
         FileOutput.EnsureParentDirectory(outputJsonPath);
 
-        var json = JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true });
+        var json = JsonSerializer.Serialize(summary, FileOutput.IndentedJsonOptions);
         File.WriteAllText(outputJsonPath, json);
     }
 

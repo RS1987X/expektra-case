@@ -143,7 +143,7 @@ public static class PartDiagnostics
     public static DiagnosticsRunResult RunDiagnostics(string part2InputCsvPath, string part3PredictionsCsvPath, string? pfiCsvPath)
     {
         var rows = Part3Modeling.ReadPart2DatasetCsv(part2InputCsvPath);
-        var predictions = PredictionPoints.ReadFromPredictionsCsv(part3PredictionsCsvPath);
+        var forecasts = Part3Modeling.ReadForecastsCsv(part3PredictionsCsvPath);
 
         IReadOnlyList<Part3PfiFeatureResult>? featureImportance = null;
         if (!string.IsNullOrWhiteSpace(pfiCsvPath) && File.Exists(pfiCsvPath))
@@ -151,33 +151,24 @@ public static class PartDiagnostics
             featureImportance = ReadFeatureImportanceCsv(pfiCsvPath);
         }
 
-        return RunDiagnostics(rows, predictions, featureImportance);
+        return RunDiagnostics(rows, forecasts, featureImportance);
     }
 
     public static DiagnosticsRunResult RunDiagnostics(
-        IReadOnlyList<Part3InputRow> rows,
-        IReadOnlyList<Part3ForecastRow> forecastRows,
+        IReadOnlyList<Part2SupervisedRow> rows,
+        IReadOnlyList<Part3ForecastRow> forecasts,
         IReadOnlyList<Part3PfiFeatureResult>? featureImportance = null)
-    {
-        var predictions = PredictionPoints.BuildFromForecastRows(forecastRows);
-        return RunDiagnostics(rows, predictions, featureImportance);
-    }
-
-    private static DiagnosticsRunResult RunDiagnostics(
-        IReadOnlyList<Part3InputRow> rows,
-        IReadOnlyList<ForecastPredictionPoint> predictions,
-        IReadOnlyList<Part3PfiFeatureResult>? featureImportance)
     {
         var preModel = BuildPreModelSummaries(rows);
         var cadence = BuildCadenceSummaries(rows);
 
         var actualLookup = BuildActualLookup(rows);
 
-        var residualSummaries = BuildResidualSummaries(predictions, actualLookup);
-        var bucketSummaries = BuildHorizonBucketSummaries(predictions, actualLookup);
-        var validationHorizonSummaries = BuildValidationHorizonSummaries(predictions, actualLookup);
-        var samplePoints = BuildSamplePoints(predictions, actualLookup);
-        var overlayPoints = BuildOverlayPoints(predictions, actualLookup);
+        var residualSummaries = BuildResidualSummaries(forecasts, actualLookup);
+        var bucketSummaries = BuildHorizonBucketSummaries(forecasts, actualLookup);
+        var validationHorizonSummaries = BuildValidationHorizonSummaries(forecasts, actualLookup);
+        var samplePoints = BuildSamplePoints(forecasts, actualLookup);
+        var overlayPoints = BuildOverlayPoints(forecasts, actualLookup);
         var targetSeries = rows
             .OrderBy(row => row.AnchorUtcTime)
             .Select(row => new DiagnosticsTargetPoint(row.AnchorUtcTime, NormalizeSplit(row.Split), row.TargetAtT))
@@ -436,7 +427,7 @@ public static class PartDiagnostics
         File.WriteAllText(outputHtmlPath, sb.ToString());
     }
 
-    private static List<DiagnosticsPreModelSummary> BuildPreModelSummaries(IReadOnlyList<Part3InputRow> rows)
+    private static List<DiagnosticsPreModelSummary> BuildPreModelSummaries(IReadOnlyList<Part2SupervisedRow> rows)
     {
         var summaries = new List<DiagnosticsPreModelSummary>();
         foreach (var splitRows in rows.GroupBy(row => NormalizeSplit(row.Split), StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal))
@@ -461,7 +452,7 @@ public static class PartDiagnostics
         return summaries;
     }
 
-    private static List<DiagnosticsCadenceSummary> BuildCadenceSummaries(IReadOnlyList<Part3InputRow> rows)
+    private static List<DiagnosticsCadenceSummary> BuildCadenceSummaries(IReadOnlyList<Part2SupervisedRow> rows)
     {
         var summaries = new List<DiagnosticsCadenceSummary>();
         foreach (var splitRows in rows.GroupBy(row => NormalizeSplit(row.Split), StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal))
@@ -510,21 +501,17 @@ public static class PartDiagnostics
         return summaries;
     }
 
-    private static Dictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> BuildActualLookup(IReadOnlyList<Part3InputRow> rows)
+    private static Dictionary<(string Split, DateTime AnchorUtcTime), double[]> BuildActualLookup(IReadOnlyList<Part2SupervisedRow> rows)
     {
-        var lookup = new Dictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double>();
+        var lookup = new Dictionary<(string Split, DateTime AnchorUtcTime), double[]>();
         foreach (var row in rows)
         {
             var split = NormalizeSplit(row.Split);
-
-            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
+            var key = (split, row.AnchorUtcTime);
+            if (!lookup.TryAdd(key, row.HorizonTargets.ToArray()))
             {
-                var key = (split, row.AnchorUtcTime, step);
-                if (!lookup.TryAdd(key, row.HorizonTargets[step - 1]))
-                {
-                    throw new InvalidOperationException(
-                        $"Duplicate ground-truth key for split '{split}', anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}', and horizon '{step}'.");
-                }
+                throw new InvalidOperationException(
+                    $"Duplicate ground-truth key for split '{split}', anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}'.");
             }
         }
 
@@ -532,26 +519,30 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsResidualSummary> BuildResidualSummaries(
-        IReadOnlyList<ForecastPredictionPoint> predictions,
-        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyList<Part3ForecastRow> forecasts,
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime), double[]> actualLookup)
     {
-        var stats = new Dictionary<(string ModelName, string Split), RunningStats>(new ModelSplitComparer());
-        foreach (var prediction in predictions)
+        var stats = new Dictionary<(string ModelName, string Split), RunningStats>();
+        foreach (var forecast in forecasts)
         {
-            var split = NormalizeSplit(prediction.Split);
-            if (!actualLookup.TryGetValue((split, prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
+            var split = NormalizeSplit(forecast.Split);
+            if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime), out var actuals))
             {
                 continue;
             }
 
-            var key = (prediction.ModelName, split);
-            if (!stats.TryGetValue(key, out var running))
-            {
-                running = new RunningStats();
-                stats[key] = running;
-            }
+            var key = (forecast.ModelName, split);
 
-            running.Add(prediction.Predicted - actual);
+            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
+            {
+                if (!stats.TryGetValue(key, out var running))
+                {
+                    running = new RunningStats();
+                    stats[key] = running;
+                }
+
+                running.Add(forecast.PredictedTargets[step - 1] - actuals[step - 1]);
+            }
         }
 
         return stats
@@ -562,27 +553,30 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsHorizonBucketSummary> BuildHorizonBucketSummaries(
-        IReadOnlyList<ForecastPredictionPoint> predictions,
-        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyList<Part3ForecastRow> forecasts,
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime), double[]> actualLookup)
     {
-        var stats = new Dictionary<(string ModelName, string Split, int BucketStart), RunningStats>(new ModelSplitBucketComparer());
-        foreach (var prediction in predictions)
+        var stats = new Dictionary<(string ModelName, string Split, int BucketStart), RunningStats>();
+        foreach (var forecast in forecasts)
         {
-            var split = NormalizeSplit(prediction.Split);
-            if (!actualLookup.TryGetValue((split, prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
+            var split = NormalizeSplit(forecast.Split);
+            if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime), out var actuals))
             {
                 continue;
             }
 
-            var bucketStart = ((prediction.HorizonStep - 1) / HorizonBucketSize) * HorizonBucketSize + 1;
-            var key = (prediction.ModelName, split, bucketStart);
-            if (!stats.TryGetValue(key, out var running))
+            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
-                running = new RunningStats();
-                stats[key] = running;
-            }
+                var bucketStart = ((step - 1) / HorizonBucketSize) * HorizonBucketSize + 1;
+                var key = (forecast.ModelName, split, bucketStart);
+                if (!stats.TryGetValue(key, out var running))
+                {
+                    running = new RunningStats();
+                    stats[key] = running;
+                }
 
-            running.Add(prediction.Predicted - actual);
+                running.Add(forecast.PredictedTargets[step - 1] - actuals[step - 1]);
+            }
         }
 
         return stats
@@ -609,37 +603,40 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsHorizonStepSummary> BuildValidationHorizonSummaries(
-        IReadOnlyList<ForecastPredictionPoint> predictions,
-        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyList<Part3ForecastRow> forecasts,
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime), double[]> actualLookup)
     {
         var stats = new Dictionary<(string ModelName, int HorizonStep), RunningStats>();
 
-        foreach (var prediction in predictions)
+        foreach (var forecast in forecasts)
         {
-            if (!string.Equals(prediction.ModelName, OverlayModelName, StringComparison.Ordinal))
+            if (!string.Equals(forecast.ModelName, OverlayModelName, StringComparison.Ordinal))
             {
                 continue;
             }
 
-            var split = NormalizeSplit(prediction.Split);
+            var split = NormalizeSplit(forecast.Split);
             if (!string.Equals(split, "Validation", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            if (!actualLookup.TryGetValue((split, prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
+            if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime), out var actuals))
             {
                 continue;
             }
 
-            var key = (prediction.ModelName, prediction.HorizonStep);
-            if (!stats.TryGetValue(key, out var running))
+            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
-                running = new RunningStats();
-                stats[key] = running;
-            }
+                var key = (forecast.ModelName, step);
+                if (!stats.TryGetValue(key, out var running))
+                {
+                    running = new RunningStats();
+                    stats[key] = running;
+                }
 
-            running.Add(prediction.Predicted - actual);
+                running.Add(forecast.PredictedTargets[step - 1] - actuals[step - 1]);
+            }
         }
 
         return stats
@@ -662,76 +659,79 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsSamplePoint> BuildSamplePoints(
-        IReadOnlyList<ForecastPredictionPoint> predictions,
-        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyList<Part3ForecastRow> forecasts,
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime), double[]> actualLookup)
     {
-        var selectedAnchors = predictions
-            .GroupBy(point => NormalizeSplit(point.Split), StringComparer.Ordinal)
+        var selectedAnchors = forecasts
+            .GroupBy(f => NormalizeSplit(f.Split), StringComparer.Ordinal)
             .SelectMany(group =>
             {
                 var split = group.Key;
                 return group
-                    .Select(point => point.AnchorUtcTime)
+                    .Select(f => f.AnchorUtcTime)
                     .Distinct()
                     .OrderBy(anchor => anchor)
-                    .Where(anchor => group.Any(point =>
-                        point.AnchorUtcTime == anchor && actualLookup.ContainsKey((split, anchor, point.HorizonStep))))
+                    .Where(anchor => actualLookup.ContainsKey((split, anchor)))
                     .Take(SampleAnchors)
                     .Select(anchor => (Split: split, AnchorUtcTime: anchor));
             })
             .ToHashSet();
 
         var sample = new List<DiagnosticsSamplePoint>();
-        foreach (var prediction in predictions
-                     .Where(point => selectedAnchors.Contains((NormalizeSplit(point.Split), point.AnchorUtcTime)))
-                     .OrderBy(point => NormalizeSplit(point.Split), StringComparer.Ordinal)
-                     .ThenBy(point => point.AnchorUtcTime)
-                     .ThenBy(point => point.ModelName, StringComparer.Ordinal)
-                     .ThenBy(point => point.HorizonStep))
+        foreach (var forecast in forecasts
+                     .Where(f => selectedAnchors.Contains((NormalizeSplit(f.Split), f.AnchorUtcTime)))
+                     .OrderBy(f => NormalizeSplit(f.Split), StringComparer.Ordinal)
+                     .ThenBy(f => f.AnchorUtcTime)
+                     .ThenBy(f => f.ModelName, StringComparer.Ordinal))
         {
-            var split = NormalizeSplit(prediction.Split);
-            if (!actualLookup.TryGetValue((split, prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
+            var split = NormalizeSplit(forecast.Split);
+            if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime), out var actuals))
             {
                 continue;
             }
 
-            sample.Add(new DiagnosticsSamplePoint(
-                prediction.ModelName,
-                split,
-                prediction.AnchorUtcTime,
-                prediction.AnchorUtcTime.AddMinutes(prediction.HorizonStep * PipelineConstants.MinutesPerStep),
-                prediction.HorizonStep,
-                prediction.Predicted,
-                actual,
-                prediction.Predicted - actual));
+            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
+            {
+                sample.Add(new DiagnosticsSamplePoint(
+                    forecast.ModelName,
+                    split,
+                    forecast.AnchorUtcTime,
+                    forecast.AnchorUtcTime.AddMinutes(step * PipelineConstants.MinutesPerStep),
+                    step,
+                    forecast.PredictedTargets[step - 1],
+                    actuals[step - 1],
+                    forecast.PredictedTargets[step - 1] - actuals[step - 1]));
+            }
         }
 
         return sample;
     }
 
     private static List<DiagnosticsOverlayPoint> BuildOverlayPoints(
-        IReadOnlyList<ForecastPredictionPoint> predictions,
-        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
+        IReadOnlyList<Part3ForecastRow> forecasts,
+        IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime), double[]> actualLookup)
     {
         var overlays = new List<DiagnosticsOverlayPoint>();
 
-        foreach (var point in predictions.Where(point =>
-                     OverlayHorizonSteps.Contains(point.HorizonStep)
-                     && string.Equals(point.ModelName, OverlayModelName, StringComparison.Ordinal)))
+        foreach (var forecast in forecasts.Where(f =>
+                     string.Equals(f.ModelName, OverlayModelName, StringComparison.Ordinal)))
         {
-            var split = NormalizeSplit(point.Split);
-            if (!actualLookup.TryGetValue((split, point.AnchorUtcTime, point.HorizonStep), out var actual))
+            var split = NormalizeSplit(forecast.Split);
+            if (!actualLookup.TryGetValue((split, forecast.AnchorUtcTime), out var actuals))
             {
                 continue;
             }
 
-            overlays.Add(new DiagnosticsOverlayPoint(
-                split,
-                point.ModelName,
-                point.HorizonStep,
-                point.AnchorUtcTime.AddMinutes(point.HorizonStep * PipelineConstants.MinutesPerStep),
-                point.Predicted,
-                actual));
+            foreach (var step in OverlayHorizonSteps)
+            {
+                overlays.Add(new DiagnosticsOverlayPoint(
+                    split,
+                    forecast.ModelName,
+                    step,
+                    forecast.AnchorUtcTime.AddMinutes(step * PipelineConstants.MinutesPerStep),
+                    forecast.PredictedTargets[step - 1],
+                    actuals[step - 1]));
+            }
         }
 
         return overlays;
@@ -1223,29 +1223,46 @@ public static class PartDiagnostics
     {
         var results = new List<Part3PfiFeatureResult>();
         using var reader = new StreamReader(csvPath);
-        var header = reader.ReadLine(); // skip header
+        var header = reader.ReadLine();
+        if (string.IsNullOrWhiteSpace(header))
+        {
+            return results;
+        }
+
+        var columns = header.Split(';');
+        var rankIndex = CsvParsing.FindRequiredColumnIndex(columns, "Rank", "PFI CSV");
+        var nameIndex = CsvParsing.FindRequiredColumnIndex(columns, "FeatureName", "PFI CSV");
+        var maeDeltaIndex = CsvParsing.FindRequiredColumnIndex(columns, "MaeDelta", "PFI CSV");
+        var maeStdIndex = CsvParsing.FindRequiredColumnIndex(columns, "MaeDeltaStdDev", "PFI CSV");
+        var rmseDeltaIndex = CsvParsing.FindRequiredColumnIndex(columns, "RmseDelta", "PFI CSV");
+        var rmseStdIndex = CsvParsing.FindRequiredColumnIndex(columns, "RmseDeltaStdDev", "PFI CSV");
+        var r2DeltaIndex = CsvParsing.FindRequiredColumnIndex(columns, "R2Delta", "PFI CSV");
+        var r2StdIndex = CsvParsing.FindRequiredColumnIndex(columns, "R2DeltaStdDev", "PFI CSV");
+
+        var lineNumber = 1;
         while (reader.ReadLine() is { } line)
         {
+            lineNumber++;
             if (string.IsNullOrWhiteSpace(line))
             {
                 continue;
             }
 
             var parts = line.Split(';');
-            if (parts.Length < 8)
+            if (parts.Length < columns.Length)
             {
-                continue;
+                throw new FormatException($"Invalid PFI row at line {lineNumber}: expected {columns.Length} columns.");
             }
 
             results.Add(new Part3PfiFeatureResult(
-                int.Parse(parts[0], InvariantCulture),
-                parts[1],
-                double.Parse(parts[2], InvariantCulture),
-                double.Parse(parts[3], InvariantCulture),
-                double.Parse(parts[4], InvariantCulture),
-                double.Parse(parts[5], InvariantCulture),
-                double.Parse(parts[6], InvariantCulture),
-                double.Parse(parts[7], InvariantCulture)));
+                CsvParsing.ParseRequiredInt(parts[rankIndex], lineNumber, "Rank"),
+                parts[nameIndex],
+                CsvParsing.ParseRequiredDouble(parts[maeDeltaIndex], lineNumber, "MaeDelta"),
+                CsvParsing.ParseRequiredDouble(parts[maeStdIndex], lineNumber, "MaeDeltaStdDev"),
+                CsvParsing.ParseRequiredDouble(parts[rmseDeltaIndex], lineNumber, "RmseDelta"),
+                CsvParsing.ParseRequiredDouble(parts[rmseStdIndex], lineNumber, "RmseDeltaStdDev"),
+                CsvParsing.ParseRequiredDouble(parts[r2DeltaIndex], lineNumber, "R2Delta"),
+                CsvParsing.ParseRequiredDouble(parts[r2StdIndex], lineNumber, "R2DeltaStdDev")));
         }
 
         return results;
@@ -1494,32 +1511,4 @@ public static class PartDiagnostics
         return new string(chars);
     }
 
-    private sealed class ModelSplitComparer : IEqualityComparer<(string ModelName, string Split)>
-    {
-        public bool Equals((string ModelName, string Split) x, (string ModelName, string Split) y)
-        {
-            return string.Equals(x.ModelName, y.ModelName, StringComparison.Ordinal)
-                   && string.Equals(x.Split, y.Split, StringComparison.Ordinal);
-        }
-
-        public int GetHashCode((string ModelName, string Split) obj)
-        {
-            return HashCode.Combine(obj.ModelName, obj.Split);
-        }
-    }
-
-    private sealed class ModelSplitBucketComparer : IEqualityComparer<(string ModelName, string Split, int BucketStart)>
-    {
-        public bool Equals((string ModelName, string Split, int BucketStart) x, (string ModelName, string Split, int BucketStart) y)
-        {
-            return string.Equals(x.ModelName, y.ModelName, StringComparison.Ordinal)
-                   && string.Equals(x.Split, y.Split, StringComparison.Ordinal)
-                   && x.BucketStart == y.BucketStart;
-        }
-
-        public int GetHashCode((string ModelName, string Split, int BucketStart) obj)
-        {
-            return HashCode.Combine(obj.ModelName, obj.Split, obj.BucketStart);
-        }
-    }
 }

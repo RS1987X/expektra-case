@@ -1,111 +1,13 @@
 using System.Globalization;
-using System.Text;
-using System.Text.Json;
 using Microsoft.ML;
 using Microsoft.ML.Data;
 
 namespace Forecasting.App;
 
-public sealed record Part3InputRow(
-    DateTime AnchorUtcTime,
-    double TargetAtT,
-    double Temperature,
-    double Windspeed,
-    double SolarIrradiation,
-    int HourOfDay,
-    int MinuteOfHour,
-    int DayOfWeek,
-    bool IsHoliday,
-    double HourSin,
-    double HourCos,
-    double WeekdaySin,
-    double WeekdayCos,
-    double TargetLag192,
-    double TargetLag672,
-    double TargetLag192Mean16,
-    double TargetLag192Std16,
-    double TargetLag192Mean96,
-    double TargetLag192Std96,
-    double TargetLag672Mean16,
-    double TargetLag672Std16,
-    double TargetLag672Mean96,
-    double TargetLag672Std96,
-    string Split,
-    IReadOnlyList<double> HorizonTargets);
-
-public sealed record Part3ForecastRow(
-    DateTime AnchorUtcTime,
-    string Split,
-    string ModelName,
-    int ExogenousFallbackSteps,
-    IReadOnlyList<double> PredictedTargets,
-    IReadOnlyList<double> ActualTargets);
-
-public sealed record Part3ModelSummary(
-    string ModelName,
-    int AnchorsForecasted,
-    int HorizonSteps,
-    int ExogenousFallbackSteps);
-
-public sealed record Part3RunSummary(
-    DateTime GeneratedAtUtc,
-    int InputRows,
-    int TrainRows,
-    int ValidationRows,
-    IReadOnlyList<Part3ModelSummary> Models);
-
-public sealed record Part3RunResult(
-    IReadOnlyList<Part3ForecastRow> Forecasts,
-    Part3RunSummary Summary,
-    Part3PfiResult? FeatureImportance);
-
-public sealed record Part3PfiFeatureResult(
-    int Rank,
-    string FeatureName,
-    double MaeDelta,
-    double MaeDeltaStdDev,
-    double RmseDelta,
-    double RmseDeltaStdDev,
-    double R2Delta,
-    double R2DeltaStdDev);
-
-public sealed record Part3PfiResult(
-    IReadOnlyList<Part3PfiFeatureResult> Features,
-    int PermutationCount,
-    int EvaluationRowCount,
-    int HorizonStep);
-
-public static class Part3Modeling
+public static partial class Part3Modeling
 {
     private const int PfiPermutationCount = 10;
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
-    private static readonly string[] RequiredPart2BaseColumns =
-    [
-        "anchorUtcTime",
-        nameof(Part3InputRow.TargetAtT),
-        nameof(Part3InputRow.Temperature),
-        nameof(Part3InputRow.Windspeed),
-        nameof(Part3InputRow.SolarIrradiation),
-        nameof(Part3InputRow.HourOfDay),
-        nameof(Part3InputRow.MinuteOfHour),
-        nameof(Part3InputRow.DayOfWeek),
-        nameof(Part3InputRow.IsHoliday),
-        nameof(Part3InputRow.HourSin),
-        nameof(Part3InputRow.HourCos),
-        nameof(Part3InputRow.WeekdaySin),
-        nameof(Part3InputRow.WeekdayCos),
-        nameof(Part3InputRow.TargetLag192),
-        nameof(Part3InputRow.TargetLag672),
-        nameof(Part3InputRow.TargetLag192Mean16),
-        nameof(Part3InputRow.TargetLag192Std16),
-        nameof(Part3InputRow.TargetLag192Mean96),
-        nameof(Part3InputRow.TargetLag192Std96),
-        nameof(Part3InputRow.TargetLag672Mean16),
-        nameof(Part3InputRow.TargetLag672Std16),
-        nameof(Part3InputRow.TargetLag672Mean96),
-        nameof(Part3InputRow.TargetLag672Std96),
-        "Split"
-    ];
 
     private sealed record FeatureSchemaEntry(string Name, Func<FeatureSnapshot, float> Selector);
 
@@ -235,7 +137,7 @@ public static class Part3Modeling
         MLContext MlContext,
         ITransformer Transformer,
         PredictionEngine<OneStepModelInput, OneStepPrediction> PredictionEngine,
-        IReadOnlyDictionary<DateTime, Part3InputRow> RowByTimestamp,
+        IReadOnlyDictionary<DateTime, Part2SupervisedRow> RowByTimestamp,
         DateTime[] HistoryTimestamps,
         double[] HistoryValues);
 
@@ -244,15 +146,15 @@ public static class Part3Modeling
         // Stable seam for adding/removing Part3 models without touching run orchestration.
         string ModelName { get; }
 
-        void Train(IReadOnlyList<Part3InputRow> trainRows, IReadOnlyList<Part3InputRow> allRows);
+        void Train(IReadOnlyList<Part2SupervisedRow> trainRows, IReadOnlyList<Part2SupervisedRow> allRows);
 
-        (double[] Predictions, int FallbackSteps) Predict(Part3InputRow anchor);
+        (double[] Predictions, int FallbackSteps) Predict(Part2SupervisedRow anchor);
     }
 
     private interface IPermutationImportanceModel
     {
         // Optional capability seam: only models that support PFI implement this.
-        Part3PfiResult? ComputePermutationImportance(IReadOnlyList<Part3InputRow> validationRows, int pfiHorizonStep);
+        Part3PfiResult? ComputePermutationImportance(IReadOnlyList<Part2SupervisedRow> validationRows, int pfiHorizonStep);
     }
 
     private sealed class BaselineSeasonalForecastingModel : IForecastingModel
@@ -261,12 +163,12 @@ public static class Part3Modeling
 
         public string ModelName => "BaselineSeasonal";
 
-        public void Train(IReadOnlyList<Part3InputRow> trainRows, IReadOnlyList<Part3InputRow> allRows)
+        public void Train(IReadOnlyList<Part2SupervisedRow> trainRows, IReadOnlyList<Part2SupervisedRow> allRows)
         {
             _model = BuildSeasonalBaseline(trainRows);
         }
 
-        public (double[] Predictions, int FallbackSteps) Predict(Part3InputRow anchor)
+        public (double[] Predictions, int FallbackSteps) Predict(Part2SupervisedRow anchor)
         {
             return PredictWithBaseline(anchor.AnchorUtcTime, RequireModel());
         }
@@ -289,17 +191,17 @@ public static class Part3Modeling
 
         public string ModelName => "FastTreeRecursive";
 
-        public void Train(IReadOnlyList<Part3InputRow> trainRows, IReadOnlyList<Part3InputRow> allRows)
+        public void Train(IReadOnlyList<Part2SupervisedRow> trainRows, IReadOnlyList<Part2SupervisedRow> allRows)
         {
             _model = BuildFastTreeRecursiveModel(trainRows, allRows, _options);
         }
 
-        public (double[] Predictions, int FallbackSteps) Predict(Part3InputRow anchor)
+        public (double[] Predictions, int FallbackSteps) Predict(Part2SupervisedRow anchor)
         {
             return PredictWithFastTreeRecursive(anchor, RequireModel());
         }
 
-        public Part3PfiResult? ComputePermutationImportance(IReadOnlyList<Part3InputRow> validationRows, int pfiHorizonStep)
+        public Part3PfiResult? ComputePermutationImportance(IReadOnlyList<Part2SupervisedRow> validationRows, int pfiHorizonStep)
         {
             return Part3Modeling.ComputePermutationImportance(RequireModel(), validationRows, pfiHorizonStep);
         }
@@ -418,115 +320,8 @@ public static class Part3Modeling
         }
     }
 
-    public static IReadOnlyList<Part3InputRow> ReadPart2DatasetCsv(string part2DatasetCsvPath)
-    {
-        var rows = new List<Part3InputRow>();
-        using var reader = new StreamReader(part2DatasetCsvPath);
-
-        var header = reader.ReadLine();
-        if (string.IsNullOrWhiteSpace(header))
-        {
-            return rows;
-        }
-
-        var columns = header.Split(';');
-        var requiredPart2Indexes = RequiredPart2BaseColumns.ToDictionary(
-            name => name,
-            name => CsvParsing.FindRequiredColumnIndex(columns, name, $"part2 supervised dataset '{part2DatasetCsvPath}'"),
-            StringComparer.Ordinal);
-        var horizonIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
-            .Select(step => CsvParsing.FindRequiredColumnIndex(columns, $"Target_tPlus{step}", $"part2 supervised dataset '{part2DatasetCsvPath}'"))
-            .ToArray();
-        var maxRequiredIndex = Math.Max(requiredPart2Indexes.Values.Max(), horizonIndexes.Length == 0 ? -1 : horizonIndexes.Max());
-
-        string? line;
-        var lineNumber = 1;
-        while ((line = reader.ReadLine()) is not null)
-        {
-            lineNumber++;
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            var parts = line.Split(';');
-            if (parts.Length <= maxRequiredIndex)
-            {
-                throw new FormatException($"Invalid row at line {lineNumber}: expected at least {maxRequiredIndex + 1} columns.");
-            }
-
-            var anchorUtcTime = CsvParsing.ParseRequiredUtcDateTime(parts[requiredPart2Indexes["anchorUtcTime"]], lineNumber, "anchorUtcTime");
-
-            var horizonTargets = new double[PipelineConstants.HorizonSteps];
-            for (var step = 0; step < PipelineConstants.HorizonSteps; step++)
-            {
-                horizonTargets[step] = CsvParsing.ParseRequiredDouble(parts[horizonIndexes[step]], lineNumber, $"Target_tPlus{step + 1}");
-            }
-
-            rows.Add(new Part3InputRow(
-                anchorUtcTime,
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetAtT)]], lineNumber, nameof(Part3InputRow.TargetAtT)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.Temperature)]], lineNumber, nameof(Part3InputRow.Temperature)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.Windspeed)]], lineNumber, nameof(Part3InputRow.Windspeed)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.SolarIrradiation)]], lineNumber, nameof(Part3InputRow.SolarIrradiation)),
-                CsvParsing.ParseRequiredInt(parts[requiredPart2Indexes[nameof(Part3InputRow.HourOfDay)]], lineNumber, nameof(Part3InputRow.HourOfDay)),
-                CsvParsing.ParseRequiredInt(parts[requiredPart2Indexes[nameof(Part3InputRow.MinuteOfHour)]], lineNumber, nameof(Part3InputRow.MinuteOfHour)),
-                CsvParsing.ParseRequiredInt(parts[requiredPart2Indexes[nameof(Part3InputRow.DayOfWeek)]], lineNumber, nameof(Part3InputRow.DayOfWeek)),
-                CsvParsing.ParseRequiredBool(parts[requiredPart2Indexes[nameof(Part3InputRow.IsHoliday)]], lineNumber, nameof(Part3InputRow.IsHoliday)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.HourSin)]], lineNumber, nameof(Part3InputRow.HourSin)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.HourCos)]], lineNumber, nameof(Part3InputRow.HourCos)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.WeekdaySin)]], lineNumber, nameof(Part3InputRow.WeekdaySin)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.WeekdayCos)]], lineNumber, nameof(Part3InputRow.WeekdayCos)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192)]], lineNumber, nameof(Part3InputRow.TargetLag192)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672)]], lineNumber, nameof(Part3InputRow.TargetLag672)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Mean16)]], lineNumber, nameof(Part3InputRow.TargetLag192Mean16)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Std16)]], lineNumber, nameof(Part3InputRow.TargetLag192Std16)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Mean96)]], lineNumber, nameof(Part3InputRow.TargetLag192Mean96)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Std96)]], lineNumber, nameof(Part3InputRow.TargetLag192Std96)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Mean16)]], lineNumber, nameof(Part3InputRow.TargetLag672Mean16)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Std16)]], lineNumber, nameof(Part3InputRow.TargetLag672Std16)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Mean96)]], lineNumber, nameof(Part3InputRow.TargetLag672Mean96)),
-                CsvParsing.ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Std96)]], lineNumber, nameof(Part3InputRow.TargetLag672Std96)),
-                parts[requiredPart2Indexes["Split"]],
-                horizonTargets));
-        }
-
-        return rows;
-    }
-
-    public static IReadOnlyList<Part3InputRow> FromPart2DatasetRows(IReadOnlyList<Part2SupervisedRow> rows)
-    {
-        return rows.Select(row => new Part3InputRow(
-                row.AnchorUtcTime,
-                row.TargetAtT,
-                row.Temperature,
-                row.Windspeed,
-                row.SolarIrradiation,
-                row.HourOfDay,
-                row.MinuteOfHour,
-                row.DayOfWeek,
-                row.IsHoliday,
-                row.HourSin,
-                row.HourCos,
-                row.WeekdaySin,
-                row.WeekdayCos,
-                row.TargetLag192,
-                row.TargetLag672,
-                row.TargetLag192Mean16,
-                row.TargetLag192Std16,
-                row.TargetLag192Mean96,
-                row.TargetLag192Std96,
-                row.TargetLag672Mean16,
-                row.TargetLag672Std16,
-                row.TargetLag672Mean96,
-                row.TargetLag672Std96,
-                row.Split,
-                row.HorizonTargets.ToArray()))
-            .ToList();
-    }
-
     public static Part3RunResult RunModels(
-        IReadOnlyList<Part3InputRow> rows,
+        IReadOnlyList<Part2SupervisedRow> rows,
         FastTreeOptions? fastTreeOptions = null,
         bool enablePfi = false,
         int pfiHorizonStep = 1)
@@ -539,9 +334,9 @@ public static class Part3Modeling
 
         // Single pass to bucket rows by split and collect forecast anchors.
         var sorted = rows.OrderBy(row => row.AnchorUtcTime).ToList();
-        var trainRows = new List<Part3InputRow>(sorted.Count);
-        var validationRows = new List<Part3InputRow>(sorted.Count);
-        var forecastAnchors = new List<Part3InputRow>(sorted.Count);
+        var trainRows = new List<Part2SupervisedRow>(sorted.Count);
+        var validationRows = new List<Part2SupervisedRow>(sorted.Count);
+        var forecastAnchors = new List<Part2SupervisedRow>(sorted.Count);
 
         // Single pass over sorted rows to avoid repeated filter scans and allocations.
         foreach (var row in sorted)
@@ -630,143 +425,9 @@ public static class Part3Modeling
         ];
     }
 
-    public static void WriteForecastsCsv(IReadOnlyList<Part3ForecastRow> forecasts, string outputCsvPath)
-    {
-        FileOutput.EnsureParentDirectory(outputCsvPath);
-
-        using var writer = new StreamWriter(outputCsvPath, false);
-        // Build header once and reuse a row buffer for lower per-row allocation pressure.
-        var headerBuilder = new StringBuilder(capacity: 64 + PipelineConstants.HorizonSteps * 24);
-        headerBuilder.Append("anchorUtcTime;Split;Model;ExogenousFallbackSteps");
-        for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
-        {
-            headerBuilder.Append(';').Append("Pred_tPlus").Append(step);
-        }
-
-        for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
-        {
-            headerBuilder.Append(';').Append("Actual_tPlus").Append(step);
-        }
-
-        writer.WriteLine(headerBuilder.ToString());
-
-        var rowBuilder = new StringBuilder(capacity: 128 + PipelineConstants.HorizonSteps * 28);
-
-        foreach (var forecast in forecasts)
-        {
-            rowBuilder.Clear();
-            rowBuilder.Append(forecast.AnchorUtcTime.ToString("yyyy-MM-dd HH:mm:ss", InvariantCulture));
-            rowBuilder.Append(';').Append(forecast.Split);
-            rowBuilder.Append(';').Append(forecast.ModelName);
-            rowBuilder.Append(';').Append(forecast.ExogenousFallbackSteps.ToString(InvariantCulture));
-
-            for (var step = 0; step < forecast.PredictedTargets.Count; step++)
-            {
-                rowBuilder.Append(';').Append(forecast.PredictedTargets[step].ToString(InvariantCulture));
-            }
-
-            for (var step = 0; step < forecast.ActualTargets.Count; step++)
-            {
-                rowBuilder.Append(';').Append(forecast.ActualTargets[step].ToString(InvariantCulture));
-            }
-
-            writer.WriteLine(rowBuilder.ToString());
-        }
-    }
-
-    public static IReadOnlyList<Part3ForecastRow> ReadForecastsCsv(string forecastsCsvPath)
-    {
-        var rows = new List<Part3ForecastRow>();
-        using var reader = new StreamReader(forecastsCsvPath);
-
-        var header = reader.ReadLine();
-        if (string.IsNullOrWhiteSpace(header))
-        {
-            return rows;
-        }
-
-        var columns = header.Split(';');
-        var anchorIndex = CsvParsing.FindRequiredColumnIndex(columns, "anchorUtcTime", "forecasts CSV");
-        var splitIndex = CsvParsing.FindRequiredColumnIndex(columns, "Split", "forecasts CSV");
-        var modelIndex = CsvParsing.FindRequiredColumnIndex(columns, "Model", "forecasts CSV");
-        var fallbackIndex = CsvParsing.FindRequiredColumnIndex(columns, "ExogenousFallbackSteps", "forecasts CSV");
-        var predictedIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
-            .Select(step => CsvParsing.FindRequiredColumnIndex(columns, $"Pred_tPlus{step}", "forecasts CSV"))
-            .ToArray();
-        var actualIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
-            .Select(step => CsvParsing.FindRequiredColumnIndex(columns, $"Actual_tPlus{step}", "forecasts CSV"))
-            .ToArray();
-
-        string? line;
-        var lineNumber = 1;
-        while ((line = reader.ReadLine()) is not null)
-        {
-            lineNumber++;
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            var parts = line.Split(';');
-            if (parts.Length < columns.Length)
-            {
-                throw new FormatException($"Invalid forecast row at line {lineNumber}: expected {columns.Length} columns.");
-            }
-
-            var anchorUtcTime = CsvParsing.ParseRequiredUtcDateTime(parts[anchorIndex], lineNumber, "anchorUtcTime");
-
-            var predicted = new double[PipelineConstants.HorizonSteps];
-            var actual = new double[PipelineConstants.HorizonSteps];
-            for (var step = 0; step < PipelineConstants.HorizonSteps; step++)
-            {
-                predicted[step] = CsvParsing.ParseRequiredDouble(parts[predictedIndexes[step]], lineNumber, $"Pred_tPlus{step + 1}");
-                actual[step] = CsvParsing.ParseRequiredDouble(parts[actualIndexes[step]], lineNumber, $"Actual_tPlus{step + 1}");
-            }
-
-            rows.Add(new Part3ForecastRow(
-                anchorUtcTime,
-                parts[splitIndex],
-                parts[modelIndex],
-                CsvParsing.ParseRequiredInt(parts[fallbackIndex], lineNumber, "ExogenousFallbackSteps"),
-                predicted,
-                actual));
-        }
-
-        return rows;
-    }
-
-    public static void WriteSummaryJson(Part3RunSummary summary, string outputJsonPath)
-    {
-        FileOutput.EnsureParentDirectory(outputJsonPath);
-
-        var json = JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(outputJsonPath, json);
-    }
-
-    public static void WriteFeatureImportanceCsv(Part3PfiResult pfiResult, string outputCsvPath)
-    {
-        FileOutput.EnsureParentDirectory(outputCsvPath);
-
-        using var writer = new StreamWriter(outputCsvPath, false);
-        writer.WriteLine("Rank;FeatureName;MaeDelta;MaeDeltaStdDev;RmseDelta;RmseDeltaStdDev;R2Delta;R2DeltaStdDev");
-
-        foreach (var feature in pfiResult.Features)
-        {
-            writer.WriteLine(string.Join(';',
-                feature.Rank.ToString(InvariantCulture),
-                feature.FeatureName,
-                feature.MaeDelta.ToString(InvariantCulture),
-                feature.MaeDeltaStdDev.ToString(InvariantCulture),
-                feature.RmseDelta.ToString(InvariantCulture),
-                feature.RmseDeltaStdDev.ToString(InvariantCulture),
-                feature.R2Delta.ToString(InvariantCulture),
-                feature.R2DeltaStdDev.ToString(InvariantCulture)));
-        }
-    }
-
     private static Part3PfiResult? ComputePermutationImportance(
         FastTreeRecursiveModel model,
-        IReadOnlyList<Part3InputRow> validationRows,
+        IReadOnlyList<Part2SupervisedRow> validationRows,
         int pfiHorizonStep)
     {
         if (validationRows.Count == 0)
@@ -819,7 +480,7 @@ public static class Part3Modeling
         return new Part3PfiResult(features, PfiPermutationCount, validationRows.Count, pfiHorizonStep);
     }
 
-    private static SeasonalBaselineModel BuildSeasonalBaseline(IReadOnlyList<Part3InputRow> trainRows)
+    private static SeasonalBaselineModel BuildSeasonalBaseline(IReadOnlyList<Part2SupervisedRow> trainRows)
     {
         if (trainRows.Count == 0)
         {
@@ -876,8 +537,8 @@ public static class Part3Modeling
     }
 
     private static FastTreeRecursiveModel BuildFastTreeRecursiveModel(
-        IReadOnlyList<Part3InputRow> trainRows,
-        IReadOnlyList<Part3InputRow> allRows,
+        IReadOnlyList<Part2SupervisedRow> trainRows,
+        IReadOnlyList<Part2SupervisedRow> allRows,
         FastTreeOptions options)
     {
         var mlContext = new MLContext(seed: options.Seed);
@@ -908,8 +569,8 @@ public static class Part3Modeling
             model, inputSchemaDefinition: schema);
 
         // Build both lookup and deduplicated history in one ordered pass.
-        var rowByTimestamp = new Dictionary<DateTime, Part3InputRow>();
-        var historyRows = new List<Part3InputRow>();
+        var rowByTimestamp = new Dictionary<DateTime, Part2SupervisedRow>();
+        var historyRows = new List<Part2SupervisedRow>();
         var orderedRows = allRows.OrderBy(row => row.AnchorUtcTime);
 
         foreach (var row in orderedRows)
@@ -932,7 +593,7 @@ public static class Part3Modeling
     }
 
     private static (double[] Predictions, int FallbackSteps) PredictWithFastTreeRecursive(
-        Part3InputRow anchor,
+        Part2SupervisedRow anchor,
         FastTreeRecursiveModel model)
     {
         var predictions = new double[PipelineConstants.HorizonSteps];
@@ -1073,7 +734,7 @@ public static class Part3Modeling
         return low;
     }
 
-    private static float[] ToFeatureVector(Part3InputRow row)
+    private static float[] ToFeatureVector(Part2SupervisedRow row)
     {
         return ToFeatureVector(new FeatureSnapshot(
             row.TargetAtT,

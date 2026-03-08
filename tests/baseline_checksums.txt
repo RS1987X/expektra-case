@@ -1,0 +1,28 @@
+# Baseline artifact checksums (2026-03-08)
+# Generated from branch: refactor/phase5-quality-cleanup (post-OOM fix)
+# Use: dotnet run -- all, then md5sum the outputs and compare.
+#
+# To verify: md5sum -c tests/baseline_checksums.txt
+
+# Part 1-3 (pipeline data files)
+8f06cc7f6b873b83b4e62487534b94d3  artifacts/part1_feature_matrix.csv
+3c9a092c5b314621f5225a695405fbb3  artifacts/part2_supervised_matrix.csv
+aede24bdd7e0dd66a5b4b14345374bab  artifacts/part3_predictions.csv
+
+# Part 4 (evaluation metrics)
+2418fe6c80fb34197a5428f758f5ee92  artifacts/part4_metrics.csv
+
+# Diagnostics
+76eed227794a8ab604cd1e4d49734fb9  artifacts/diagnostics/postmodel_residual_summary.csv
+d1462a38b3a5e5015957852b644e83af  artifacts/diagnostics/postmodel_bias_by_horizon_bucket.csv
+dcb032892ef118fe697b805b3b2bef39  artifacts/diagnostics/postmodel_validation_error_by_horizon.csv
+
+# Key metrics (for quick human comparison)
+# Part4 metrics:
+#   BaselineSeasonal:  EvaluatedPoints=516288  MAE=19581.130263  RMSE=19982.570524  MAPE=29.813312
+#   FastTreeRecursive: EvaluatedPoints=516288  MAE=3121.011042   RMSE=4199.722314   MAPE=4.838075
+#
+# Runtime (dotnet run -- all, WSL2 desktop):
+#   real    10m26.122s
+#   user    9m8.946s
+#   sys     1m57.222s
