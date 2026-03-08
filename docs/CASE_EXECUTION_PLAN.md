@@ -137,12 +137,8 @@ Implement Part 2 according to the assignment: create lagged target features, rol
 ### Split-safe multi-step mapping rule (purging)
 
 - Use anchor-based samples: each anchor at time `t` maps to one full target vector `y(t+1..t+192)`.
-- To avoid leakage, split eligibility is based on the label horizon, not only on anchor timestamp.
-- Let `v0` be validation start timestamp and `H = 192`.
-	- Training anchors must satisfy: `t + H < v0`.
-	- Validation anchors must satisfy: `t >= v0` and `t + H <= seriesEnd`.
-- This implies a purge zone before validation: anchors in `(v0 - H, v0)` are excluded from both train and validation because their labels would overlap validation.
-- Do not use partial-horizon labels in Del 2; keep only anchors with a complete 192-step output vector.
+- Canonical 3-way split and purge rules are defined in `3-way split (train/validation/holdout)` at the end of this document.
+- Part 2 must apply those rules exactly when assigning `Split` labels.
 
 ### Implementation steps
 
@@ -602,3 +598,170 @@ Compute and persist permutation feature importance (PFI) for the FastTree regres
 - `dotnet test ExpekraCase.sln --collect:"XPlat Code Coverage"`
 - `dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part3 <part2_input_csv> <predictions_output_csv> <summary_output_json>` (verify PFI CSV appears in artifacts)
 - `dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- diagnostics <part2_input_csv> <part3_predictions_csv>` (verify PFI SVG and HTML section)
+
+## 3-way split (train/validation/holdout)
+
+### Goal
+
+Define one canonical, leakage-safe contract for split assignment and evaluation usage across Parts 2-4.
+
+### Scope
+
+1. Centralize deterministic 3-way split rules for anchor eligibility.
+2. Define evaluation protocol intent for `Validation` vs `Holdout`.
+3. Ensure all related parts reference this section as the source of truth.
+4. Keep this behavior optional via CLI (not the default pipeline setting).
+
+### Activation (CLI opt-in, not default)
+
+- 3-way split mode must be explicitly enabled via CLI flag(s); it is not the standard/default run mode.
+- When the opt-in flag is absent, pipeline behavior stays on the existing default split/evaluation flow.
+- Planned CLI shape (final naming can be adjusted in implementation):
+	- split creation toggle: `--three-way-split`
+	- evaluation target selection: `--eval-split validation|holdout`
+
+### Intended workflow (model reduction/tuning)
+
+- Purpose: support iterative model tuning/reduction using validation evidence, then unbiased final check on holdout.
+- Iterative phase:
+	- run with `--three-way-split`
+	- use validation outputs (for example error metrics and PFI) to tune/reduce features/model complexity
+	- repeat until model is frozen
+- Final phase:
+	- evaluate the frozen/reduced model once on holdout (`--eval-split holdout`)
+	- treat holdout results as final reporting only, not as feedback for more retuning
+
+### Detailed execution workflow (human-in-the-loop feature reduction)
+
+1. Baseline setup (single source input)
+	- Keep raw input unchanged (do not create or maintain a manually truncated file under `data/`).
+	- Use the existing pipeline input path and enable 3-way behavior through CLI only.
+	- If an optional derived split artifact is needed for inspection, write it to `artifacts/`, not `data/`.
+
+2. Create leakage-safe split configuration
+	- Run with 3-way mode enabled (for example `--three-way-split`) and explicit holdout size (for example `--holdout-days 30`, final flag name decided in implementation).
+	- Ensure split order is deterministic and timestamp-based (`Train` then `Validation` then `Holdout`).
+	- Ensure purge zones are applied at both boundaries before assigning split labels.
+
+3. Train reference model(s) on non-holdout training split
+	- Train models using only rows eligible for fitting (`Split=Train`) during iterative reduction cycles.
+	- Produce standard prediction and summary artifacts as usual.
+	- Generate validation-focused diagnostics/PFI outputs used for feature decisions.
+
+4. Validation analysis checkpoint (human decision)
+	- Review validation metrics (for example `MAE`, `RMSE`, `MAPE`) and PFI rankings.
+	- Decide which features to keep/remove manually.
+	- Record chosen feature subset in a reproducible form (CLI include-list or config value).
+
+5. Train reduced model candidate
+	- Re-run training with explicit feature subset (for example `--feature-include <comma-separated-features>`, final naming decided in implementation).
+	- Evaluate on validation again and compare against previous run.
+	- Repeat steps 4-5 until feature subset is frozen.
+
+6. Final training policy before holdout
+	- Once subset is frozen, retrain final reduced model on non-holdout data according to selected policy:
+		- conservative option: train on `Train` only,
+		- final-fit option: train on `Train+Validation`.
+	- Policy must be explicit in run notes/artifacts so comparisons remain interpretable.
+
+7. One-time holdout evaluation
+	- Run evaluation targeting holdout only (for example `--eval-split holdout`).
+	- Report reduced model alongside comparison models on the same holdout points.
+	- Persist split-tagged outputs (for example metrics and sample files labeled `holdout`).
+
+8. Guardrail after holdout
+	- Do not use holdout outcomes to remove/add features and rerun tuning.
+	- If additional tuning is required, start a new experiment cycle and reserve a fresh final-evaluation window.
+
+9. Recommended artifact trail per cycle
+	- Validation cycle artifacts: metrics, diagnostics, PFI table, selected-feature list.
+	- Final cycle artifacts: frozen feature list, final training policy (`Train` or `Train+Validation`), holdout metrics, holdout prediction-vs-actual sample.
+	- Keep artifact naming deterministic and split-tagged to support reproducible comparisons.
+
+### Reproducibility lock (pre/post-human runs must match)
+
+To ensure the split is identical before and after human feature-selection decisions, split-defining inputs must be frozen and verified.
+
+1. Freeze split-defining inputs before the first run:
+	- input dataset path
+	- input dataset checksum (content hash)
+	- `--three-way-split` enabled/disabled
+	- `--validation-days`, `--holdout-days`
+	- horizon (`H = 192`) and cadence assumptions
+
+2. Persist resolved split boundaries and counts in run manifest:
+	- `ValidationStartUtc` (`v0`)
+	- `HoldoutStartUtc` (`h0`)
+	- `SeriesEndUtc`
+	- `TrainAnchors`, `ValidationAnchors`, `HoldoutAnchors`
+	- `PurgedBeforeValidation`, `PurgedBeforeHoldout`
+
+3. Compute and persist a split fingerprint:
+	- deterministic hash over:
+		- input checksum
+		- `v0`, `h0`, `H`
+		- split counts and purge counts
+
+4. Post-human run guard:
+	- compare current split-defining inputs and fingerprint against frozen manifest
+	- fail fast on mismatch with clear error (do not continue training/evaluation)
+
+5. Allowed post-human changes:
+	- feature subset (for example `--feature-include`)
+	- model roster/hyperparameters
+	- PFI settings
+	- outputs/paths
+	- not allowed without starting a new experiment cycle:
+		- input dataset content
+		- validation/holdout window settings
+		- split mode on/off
+
+6. Artifact policy:
+	- include split fingerprint in Part 3/Part 4 outputs and summaries
+	- require holdout reports to reference the same split fingerprint as the corresponding validation/PFI run
+
+### Canonical definitions
+
+- Use anchor-based samples: each anchor at time `t` maps to one full target vector `y(t+1..t+192)`.
+- Split eligibility is based on full label horizon, not only anchor timestamp.
+- Deterministic split timestamps:
+	- `v0` = validation start timestamp
+	- `h0` = holdout start timestamp
+	- `H = 192`
+	- Required ordering: `trainStart <= ... < v0 < h0 <= seriesEnd`
+- Full-horizon split isolation:
+	- Training anchors: `t + H < v0`
+	- Validation anchors: `t >= v0` and `t + H < h0`
+	- Holdout anchors: `t >= h0` and `t + H <= seriesEnd`
+- Purge zones:
+	- Pre-validation purge: anchors in `(v0 - H, v0)` are excluded.
+	- Pre-holdout purge: anchors in `(h0 - H, h0)` are excluded.
+- No anchor may belong to multiple splits.
+- No split may use partial-horizon labels.
+
+### Evaluation protocol
+
+- `Train`: fitting only.
+- `Validation`: iterative model comparison/tuning and diagnostics.
+- `Holdout`: final one-time unbiased reporting.
+- Protocol order:
+	1) run validation evaluation during development,
+	2) freeze model choice,
+	3) run holdout evaluation once and treat as report output (not tuning input).
+
+### Deliverables
+
+1. Part 2 output includes deterministic `Split` labels (`Train`, `Validation`, `Holdout`) that satisfy the above contract.
+2. Part 3 uses only `Split=Train` for fitting; validation/holdout remain out-of-sample.
+3. Part 4 evaluates a selected split (`Validation` or `Holdout`) and labels output artifacts by split.
+4. CLI contract documents that 3-way split is opt-in and default behavior is unchanged when opt-in flags are omitted.
+
+### Minimum tests
+
+1. Split-boundary tests for both purge zones (`v0 - H`, `h0 - H`).
+2. Training-data filter test proving only `Split=Train` is used for model fitting.
+3. Evaluation filter test proving Part 4 includes only requested split rows.
+4. Guardrail test showing holdout reporting does not alter training/split assignment behavior.
+5. CLI behavior test proving 3-way split logic is activated only when opt-in flags are provided.
+6. Reproducibility guard test proving post-human run fails when split-defining inputs differ from frozen manifest.
+7. Fingerprint consistency test proving identical inputs regenerate identical split fingerprint and split counts.
