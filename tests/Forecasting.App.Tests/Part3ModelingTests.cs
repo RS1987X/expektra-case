@@ -69,6 +69,25 @@ public class Part3ModelingTests
     }
 
     [Fact]
+    public void ReadPart2DatasetCsv_MissingRequiredFeatureColumn_ThrowsDeterministicErrorWithPath()
+    {
+        var columns = BuildPart3CsvHeader().Split(';').Where(column => !string.Equals(column, "Temperature", StringComparison.Ordinal)).ToArray();
+        var path = CreateTempFile(string.Join(Environment.NewLine,
+            string.Join(';', columns),
+            BuildPart3CsvRow()));
+
+        try
+        {
+            var ex = Assert.Throws<FormatException>(() => Part3Modeling.ReadPart2DatasetCsv(path));
+            Assert.Equal($"Missing required column 'Temperature' in part2 supervised dataset '{path}'.", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void ReadPart2DatasetCsv_InvalidNumericAndBool_ThrowFormatException()
     {
         var numericCells = BuildPart3CsvCells();
