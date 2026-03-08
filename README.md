@@ -72,6 +72,8 @@ Jag har inte kört explicit feature-importance-export i denna version, men utifr
 
 ### 3. Vad skulle du göra annorlunda eller lägga till med mer tid?
 - Köra tidsserie-CV med flera rullande foldar (inte bara en valideringssplit).
+- Införa 3-way split (Train/Validation/Holdout): använda Validation för hyperparameter-tuning och feature selection, och en separat Holdout för slutlig och opartisk utvärdering.
+- Träna om en reducerad modell efter feature importance/feature selection och jämföra den mot full modell samt baseline på Holdout.
 - Hyperparamter-tuning for FastTree samt jämforelse mot direct multi-step strategi.
 - Hantera framtida exogena variabler mer explicit (prognoser/scenarier) i stället för fallback där data saknas.
 - Lägga till probabilistiska prognoser (prediktionsintervall), inte bara punktprognos.

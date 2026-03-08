@@ -311,6 +311,12 @@ public static class Part1Preprocessing
                 throw new FormatException($"Invalid utcTime at line {lineNumber}: '{parts[0]}'.");
             }
 
+            if (utcTime.Second != 0 || utcTime.Minute % PipelineConstants.MinutesPerStep != 0)
+            {
+                throw new FormatException(
+                    $"Invalid utcTime at line {lineNumber}: '{parts[0]}' is not cadence-aligned to {PipelineConstants.MinutesPerStep}-minute steps.");
+            }
+
             var target = ParseNullableDouble(parts[1], lineNumber, "Target");
             var temperature = ParseNullableDouble(parts[2], lineNumber, "Temperature");
             var windspeed = ParseNullableDouble(parts[3], lineNumber, "Windspeed");
@@ -475,6 +481,11 @@ public static class Part1Preprocessing
         if (!double.TryParse(value, NumberStyles.Float, SwedishCulture, out var parsed))
         {
             throw new FormatException($"Invalid {columnName} at line {lineNumber}: '{value}'.");
+        }
+
+        if (!double.IsFinite(parsed))
+        {
+            throw new FormatException($"Invalid {columnName} at line {lineNumber}: non-finite value '{value}'.");
         }
 
         return parsed;

@@ -82,6 +82,65 @@ public class Part2FeatureEngineeringTests
     }
 
     [Fact]
+    public void BuildDataset_LeakageBoundaries_EnforceTrainHorizonAndValidationAnchorRules()
+    {
+        var rows = BuildSyntheticFeatureRows(1200);
+        var validationStartUtc = rows[1000].UtcTime;
+
+        var dataset = Part2FeatureEngineering.BuildDataset(rows, validationStartUtc);
+
+        var trainAnchorTimes = dataset.Rows
+            .Where(row => string.Equals(row.Split, "Train", StringComparison.OrdinalIgnoreCase))
+            .Select(row => row.AnchorUtcTime)
+            .ToList();
+        var validationAnchorTimes = dataset.Rows
+            .Where(row => string.Equals(row.Split, "Validation", StringComparison.OrdinalIgnoreCase))
+            .Select(row => row.AnchorUtcTime)
+            .ToList();
+
+        // Explicit boundary oracle for this deterministic fixture:
+        // train anchors: 767..807, purged anchors: 808..999, validation anchors: 1000..1007.
+        Assert.Equal(41, trainAnchorTimes.Count);
+        Assert.Equal(rows[767].UtcTime, trainAnchorTimes.First());
+        Assert.Equal(rows[807].UtcTime, trainAnchorTimes.Last());
+
+        Assert.Equal(8, validationAnchorTimes.Count);
+        Assert.Equal(rows[1000].UtcTime, validationAnchorTimes.First());
+        Assert.Equal(rows[1007].UtcTime, validationAnchorTimes.Last());
+
+        // No output rows should appear in the purged boundary window [808..999].
+        var outputAnchorSet = dataset.Rows
+            .Select(row => row.AnchorUtcTime)
+            .ToHashSet();
+        Assert.DoesNotContain(rows[808].UtcTime, outputAnchorSet);
+        Assert.DoesNotContain(rows[999].UtcTime, outputAnchorSet);
+    }
+
+    [Fact]
+    public void BuildDataset_LeakageBoundaries_PurgesAnchorWindowBeforeValidationStart()
+    {
+        var rows = BuildSyntheticFeatureRows(1200);
+        var validationStartUtc = rows[1000].UtcTime;
+
+        var dataset = Part2FeatureEngineering.BuildDataset(rows, validationStartUtc);
+
+        var outputAnchorSet = dataset.Rows
+            .Select(row => row.AnchorUtcTime)
+            .ToHashSet();
+
+        // Boundary sentinels around the purge window.
+        Assert.Contains(rows[807].UtcTime, outputAnchorSet); // last train anchor
+        Assert.DoesNotContain(rows[808].UtcTime, outputAnchorSet); // first purged anchor
+        Assert.DoesNotContain(rows[999].UtcTime, outputAnchorSet); // last purged anchor
+        Assert.Contains(rows[1000].UtcTime, outputAnchorSet); // first validation anchor
+
+        // Split accounting must fully partition candidate anchors.
+        Assert.Equal(
+            dataset.Summary.CandidateAnchors,
+            dataset.Summary.TrainAnchors + dataset.Summary.ValidationAnchors + dataset.Summary.PurgedAnchors);
+    }
+
+    [Fact]
     public void BuildDataset_ReturnsEmptyDatasetForEmptyInput()
     {
         var dataset = Part2FeatureEngineering.BuildDataset([]);

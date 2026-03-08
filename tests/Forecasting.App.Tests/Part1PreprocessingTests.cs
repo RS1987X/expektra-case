@@ -184,6 +184,203 @@ public class Part1PreprocessingTests
         }
     }
 
+    [Fact]
+    public void BuildFeatureMatrix_ThrowsWhenTargetColumnHasNoObservedValues()
+    {
+        var dataPath = CreateTempFile(
+            """
+            utcTime;Target;Temperature;Windspeed;SolarIrradiation
+            2024-01-01 00:00;;10,0;2,0;0,0
+            2024-01-01 00:15;;10,1;2,1;0,1
+            """);
+
+        var holidaysPath = CreateTempFile(
+            """
+            Id;Country;StartDate;EndDate;Type;RegionalScope;Name
+            123;SE;2024-01-01;;Public;National;SV Nyårsdagen
+            """);
+
+        try
+        {
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                Part1Preprocessing.BuildFeatureMatrix(dataPath, holidaysPath));
+
+            Assert.Contains("Target column has no valid values", ex.Message);
+        }
+        finally
+        {
+            File.Delete(dataPath);
+            File.Delete(holidaysPath);
+        }
+    }
+
+    [Fact]
+    public void BuildPreprocessedDatasetForEvaluation_InvalidValidationWindowDays_Throws()
+    {
+        var dataPath = CreateTempFile(
+            """
+            utcTime;Target;Temperature;Windspeed;SolarIrradiation
+            2024-01-01 00:00;1,0;10,0;3,0;0,0
+            2024-01-02 00:00;2,0;10,1;3,1;0,1
+            """);
+
+        var holidaysPath = CreateTempFile(
+            """
+            Id;Country;StartDate;EndDate;Type;RegionalScope;Name
+            123;SE;2024-01-01;;Public;National;SV Nyårsdagen
+            """);
+
+        try
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                Part1Preprocessing.BuildPreprocessedDatasetForEvaluation(dataPath, holidaysPath, validationWindowDays: 0));
+        }
+        finally
+        {
+            File.Delete(dataPath);
+            File.Delete(holidaysPath);
+        }
+    }
+
+    [Fact]
+    public void BuildPreprocessedDatasetForEvaluation_ThrowsWhenNoObservedTargetBeforeValidationStart()
+    {
+        var dataPath = CreateTempFile(
+            """
+            utcTime;Target;Temperature;Windspeed;SolarIrradiation
+            2024-01-01 00:00;;10,0;3,0;0,0
+            2024-01-02 00:00;2,0;10,1;3,1;0,1
+            """);
+
+        var holidaysPath = CreateTempFile(
+            """
+            Id;Country;StartDate;EndDate;Type;RegionalScope;Name
+            123;SE;2024-01-01;;Public;National;SV Nyårsdagen
+            """);
+
+        try
+        {
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                Part1Preprocessing.BuildPreprocessedDatasetForEvaluation(dataPath, holidaysPath, validationWindowDays: 1));
+
+            Assert.Contains("Target has no observed values before validation start", ex.Message);
+        }
+        finally
+        {
+            File.Delete(dataPath);
+            File.Delete(holidaysPath);
+        }
+    }
+
+    [Fact]
+    public void BuildPreprocessedDatasetForEvaluation_DropsOnlyFirstValidationCarryoverAndKeepsLaterValidationImputation()
+    {
+        var dataPath = CreateTempFile(
+            """
+            utcTime;Target;Temperature;Windspeed;SolarIrradiation
+            2024-01-01 00:00;1,0;10,0;3,0;0,0
+            2024-01-02 00:00;;10,1;3,1;0,1
+            2024-01-03 00:00;2,0;10,2;3,2;0,2
+            2024-01-04 00:00;;10,3;3,3;0,3
+            2024-01-05 00:00;3,0;10,4;3,4;0,4
+            """);
+
+        var holidaysPath = CreateTempFile(
+            """
+            Id;Country;StartDate;EndDate;Type;RegionalScope;Name
+            123;SE;2024-01-01;;Public;National;SV Nyårsdagen
+            """);
+
+        try
+        {
+            var preprocessed = Part1Preprocessing.BuildPreprocessedDatasetForEvaluation(
+                dataPath,
+                holidaysPath,
+                validationWindowDays: 3);
+
+            // Jan 2 is first validation row and gets target from training carryover -> must be dropped.
+            Assert.DoesNotContain(preprocessed.PersistedFeatures,
+                row => row.UtcTime == new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc));
+
+            // Jan 4 is imputed from prior validation observation (Jan 3) -> should remain.
+            Assert.Contains(preprocessed.PersistedFeatures,
+                row => row.UtcTime == new DateTime(2024, 1, 4, 0, 0, 0, DateTimeKind.Utc));
+
+            Assert.Equal(1, preprocessed.AuditSummary.DroppedValidationRowsFromTrainingImputation);
+            var droppedEvent = Assert.Single(preprocessed.AuditEvents);
+            Assert.Equal(new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc), droppedEvent.UtcTime);
+            Assert.Equal("Training", droppedEvent.ImputationSource);
+        }
+        finally
+        {
+            File.Delete(dataPath);
+            File.Delete(holidaysPath);
+        }
+    }
+
+    [Fact]
+    public void ReadRawDataRows_ParsesBothAcceptedDateFormats()
+    {
+        var dataPath = CreateTempFile(
+            """
+            utcTime;Target;Temperature;Windspeed;SolarIrradiation
+            2024-01-01 00:00;1,0;10,0;2,0;0,0
+            2024-01-01 00:15:00;2,0;10,1;2,1;0,1
+            """);
+
+        try
+        {
+            var rows = Part1Preprocessing.ReadRawDataRows(dataPath);
+            Assert.Equal(2, rows.Count);
+            Assert.Equal(new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), rows[0].UtcTime);
+            Assert.Equal(new DateTime(2024, 1, 1, 0, 15, 0, DateTimeKind.Utc), rows[1].UtcTime);
+        }
+        finally
+        {
+            File.Delete(dataPath);
+        }
+    }
+
+    [Fact]
+    public void ReadRawDataRows_ThrowsOnNonFiniteNumeric()
+    {
+        var dataPath = CreateTempFile(
+            """
+            utcTime;Target;Temperature;Windspeed;SolarIrradiation
+            2024-01-01 00:00;NaN;10,0;2,0;0,0
+            """);
+
+        try
+        {
+            var ex = Assert.Throws<FormatException>(() => Part1Preprocessing.ReadRawDataRows(dataPath));
+            Assert.Contains("non-finite", ex.Message);
+        }
+        finally
+        {
+            File.Delete(dataPath);
+        }
+    }
+
+    [Fact]
+    public void ReadRawDataRows_ThrowsWhenTimestampIsNotCadenceAligned()
+    {
+        var dataPath = CreateTempFile(
+            """
+            utcTime;Target;Temperature;Windspeed;SolarIrradiation
+            2024-01-01 00:07;1,0;10,0;2,0;0,0
+            """);
+
+        try
+        {
+            var ex = Assert.Throws<FormatException>(() => Part1Preprocessing.ReadRawDataRows(dataPath));
+            Assert.Contains("cadence-aligned", ex.Message);
+        }
+        finally
+        {
+            File.Delete(dataPath);
+        }
+    }
+
     private static string CreateTempFile(string content)
     {
         var path = Path.Combine(Path.GetTempPath(), $"forecasting-test-{Guid.NewGuid():N}.csv");
