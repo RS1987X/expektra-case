@@ -35,36 +35,30 @@ public static class Part4Evaluation
     public static Part4RunResult RunEvaluation(string part2InputCsvPath, string part3PredictionsCsvPath)
     {
         var part2Rows = Part3Modeling.ReadPart2DatasetCsv(part2InputCsvPath);
-        var predictionPoints = PredictionPoints.ReadFromPredictionsCsv(part3PredictionsCsvPath);
-        return RunEvaluation(part2Rows, predictionPoints);
+        var forecasts = Part3Modeling.ReadForecastsCsv(part3PredictionsCsvPath);
+        return RunEvaluation(part2Rows, forecasts);
     }
 
     public static Part4RunResult RunEvaluation(
         IReadOnlyList<Part3InputRow> part2Rows,
         IReadOnlyList<Part3ForecastRow> forecastRows)
     {
-        var predictionPoints = PredictionPoints.BuildFromForecastRows(forecastRows);
-        return RunEvaluation(part2Rows, predictionPoints);
-    }
+        ValidateForecastRows(forecastRows);
 
-    private static Part4RunResult RunEvaluation(
-        IReadOnlyList<Part3InputRow> part2Rows,
-        IReadOnlyList<ForecastPredictionPoint> predictionPoints)
-    {
         var actualPoints = BuildValidationActualPoints(part2Rows);
         var actualLookup = BuildActualLookup(actualPoints);
 
-        var validationPredictionPoints = predictionPoints
-            .Where(point => string.Equals(point.Split, "Validation", StringComparison.OrdinalIgnoreCase))
+        var validationForecasts = forecastRows
+            .Where(row => string.Equals(row.Split, "Validation", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        var metrics = ComputeMetrics(validationPredictionPoints, actualLookup);
-        var sample = BuildDeterministicSample(validationPredictionPoints, actualLookup);
+        var metrics = ComputeMetrics(validationForecasts, actualLookup);
+        var sample = BuildDeterministicSample(validationForecasts, actualLookup);
 
         return new Part4RunResult(
             DateTime.UtcNow,
             actualPoints.Count,
-            validationPredictionPoints.Count,
+            validationForecasts.Count * PipelineConstants.HorizonSteps,
             metrics,
             sample);
     }
@@ -111,39 +105,42 @@ public static class Part4Evaluation
     }
 
     private static List<Part4ModelMetrics> ComputeMetrics(
-        IReadOnlyList<ForecastPredictionPoint> predictionPoints,
+        IReadOnlyList<Part3ForecastRow> forecasts,
         IReadOnlyDictionary<(DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var accumulators = new Dictionary<string, MetricsAccumulator>(StringComparer.Ordinal);
 
-        foreach (var modelName in predictionPoints.Select(point => point.ModelName).Distinct(StringComparer.Ordinal))
+        foreach (var modelName in forecasts.Select(row => row.ModelName).Distinct(StringComparer.Ordinal))
         {
             accumulators[modelName] = new MetricsAccumulator();
         }
 
-        foreach (var prediction in predictionPoints)
+        foreach (var forecast in forecasts)
         {
-            if (!actualLookup.TryGetValue((prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
+            var accumulator = accumulators[forecast.ModelName];
+
+            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
-                continue;
+                if (!actualLookup.TryGetValue((forecast.AnchorUtcTime, step), out var actual))
+                {
+                    continue;
+                }
+
+                var error = forecast.PredictedTargets[step - 1] - actual;
+                var absError = Math.Abs(error);
+                accumulator.EvaluatedPoints++;
+                accumulator.SumAbs += absError;
+                accumulator.SumSquared += error * error;
+
+                if (actual == 0d)
+                {
+                    accumulator.ZeroActualExcludedPoints++;
+                    continue;
+                }
+
+                accumulator.MapeEvaluatedPoints++;
+                accumulator.SumApePercent += Math.Abs(error / actual) * 100d;
             }
-
-            var accumulator = accumulators[prediction.ModelName];
-
-            var error = prediction.Predicted - actual;
-            var absError = Math.Abs(error);
-            accumulator.EvaluatedPoints++;
-            accumulator.SumAbs += absError;
-            accumulator.SumSquared += error * error;
-
-            if (actual == 0d)
-            {
-                accumulator.ZeroActualExcludedPoints++;
-                continue;
-            }
-
-            accumulator.MapeEvaluatedPoints++;
-            accumulator.SumApePercent += Math.Abs(error / actual) * 100d;
         }
 
         var metrics = new List<Part4ModelMetrics>();
@@ -179,15 +176,15 @@ public static class Part4Evaluation
     }
 
     private static List<Part4SamplePoint> BuildDeterministicSample(
-        IReadOnlyList<ForecastPredictionPoint> predictionPoints,
+        IReadOnlyList<Part3ForecastRow> forecasts,
         IReadOnlyDictionary<(DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
-        var firstAnchor = predictionPoints
-            .Select(point => point.AnchorUtcTime)
+        var firstAnchor = forecasts
+            .Select(row => row.AnchorUtcTime)
             .Distinct()
             .OrderBy(timestamp => timestamp)
-            .FirstOrDefault(anchor => predictionPoints.Any(point =>
-                point.AnchorUtcTime == anchor && actualLookup.ContainsKey((point.AnchorUtcTime, point.HorizonStep))));
+            .FirstOrDefault(anchor => Enumerable.Range(1, PipelineConstants.HorizonSteps)
+                .Any(step => actualLookup.ContainsKey((anchor, step))));
 
         if (firstAnchor == default)
         {
@@ -195,28 +192,26 @@ public static class Part4Evaluation
         }
 
         var sample = new List<Part4SamplePoint>();
-        var pointsByModelAndStep = predictionPoints
-            .Where(point => point.AnchorUtcTime == firstAnchor)
-            .ToDictionary(
-                point => (point.ModelName, point.HorizonStep),
-                point => point,
-                new ModelStepComparer());
 
-        foreach (var key in pointsByModelAndStep.Keys.OrderBy(key => key.ModelName, StringComparer.Ordinal).ThenBy(key => key.HorizonStep))
+        foreach (var forecast in forecasts
+                     .Where(row => row.AnchorUtcTime == firstAnchor)
+                     .OrderBy(row => row.ModelName, StringComparer.Ordinal))
         {
-            var prediction = pointsByModelAndStep[key];
-            if (!actualLookup.TryGetValue((prediction.AnchorUtcTime, prediction.HorizonStep), out var actual))
+            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
             {
-                continue;
-            }
+                if (!actualLookup.TryGetValue((forecast.AnchorUtcTime, step), out var actual))
+                {
+                    continue;
+                }
 
-            sample.Add(new Part4SamplePoint(
-                prediction.ModelName,
-                prediction.AnchorUtcTime,
-                prediction.AnchorUtcTime.AddMinutes(prediction.HorizonStep * PipelineConstants.MinutesPerStep),
-                prediction.HorizonStep,
-                prediction.Predicted,
-                actual));
+                sample.Add(new Part4SamplePoint(
+                    forecast.ModelName,
+                    forecast.AnchorUtcTime,
+                    forecast.AnchorUtcTime.AddMinutes(step * PipelineConstants.MinutesPerStep),
+                    step,
+                    forecast.PredictedTargets[step - 1],
+                    actual));
+            }
         }
 
         return sample;
@@ -267,16 +262,26 @@ public static class Part4Evaluation
         public double SumApePercent { get; set; }
     }
 
-    private sealed class ModelStepComparer : IEqualityComparer<(string ModelName, int HorizonStep)>
+    private static void ValidateForecastRows(IReadOnlyList<Part3ForecastRow> forecastRows)
     {
-        public bool Equals((string ModelName, int HorizonStep) x, (string ModelName, int HorizonStep) y)
-        {
-            return string.Equals(x.ModelName, y.ModelName, StringComparison.Ordinal) && x.HorizonStep == y.HorizonStep;
-        }
+        var seenKeys = new HashSet<(string ModelName, DateTime AnchorUtcTime)>();
 
-        public int GetHashCode((string ModelName, int HorizonStep) obj)
+        foreach (var row in forecastRows)
         {
-            return HashCode.Combine(obj.ModelName, obj.HorizonStep);
+            if (!seenKeys.Add((row.ModelName, row.AnchorUtcTime)))
+            {
+                throw new InvalidOperationException(
+                    $"Duplicate prediction key for model '{row.ModelName}', anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}'.");
+            }
+
+            for (var step = 0; step < row.PredictedTargets.Count; step++)
+            {
+                if (!double.IsFinite(row.PredictedTargets[step]))
+                {
+                    throw new FormatException(
+                        $"Forecast for model '{row.ModelName}', anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}', step {step + 1} contains a non-finite value.");
+                }
+            }
         }
     }
 }
