@@ -79,8 +79,35 @@ public static class Part3Modeling
 {
     private const int PfiPermutationCount = 10;
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
+    private static readonly string[] RequiredPart2BaseColumns =
+    [
+        "anchorUtcTime",
+        nameof(Part3InputRow.TargetAtT),
+        nameof(Part3InputRow.Temperature),
+        nameof(Part3InputRow.Windspeed),
+        nameof(Part3InputRow.SolarIrradiation),
+        nameof(Part3InputRow.HourOfDay),
+        nameof(Part3InputRow.MinuteOfHour),
+        nameof(Part3InputRow.DayOfWeek),
+        nameof(Part3InputRow.IsHoliday),
+        nameof(Part3InputRow.HourSin),
+        nameof(Part3InputRow.HourCos),
+        nameof(Part3InputRow.WeekdaySin),
+        nameof(Part3InputRow.WeekdayCos),
+        nameof(Part3InputRow.TargetLag192),
+        nameof(Part3InputRow.TargetLag672),
+        nameof(Part3InputRow.TargetLag192Mean16),
+        nameof(Part3InputRow.TargetLag192Std16),
+        nameof(Part3InputRow.TargetLag192Mean96),
+        nameof(Part3InputRow.TargetLag192Std96),
+        nameof(Part3InputRow.TargetLag672Mean16),
+        nameof(Part3InputRow.TargetLag672Std16),
+        nameof(Part3InputRow.TargetLag672Mean96),
+        nameof(Part3InputRow.TargetLag672Std96),
+        "Split"
+    ];
 
-    private sealed record FeatureDefinition(string Name, Func<FeatureSnapshot, float> Selector);
+    private sealed record FeatureSchemaEntry(string Name, Func<FeatureSnapshot, float> Selector);
 
     private sealed record FeatureSnapshot(
         double TargetAtT,
@@ -106,7 +133,7 @@ public static class Part3Modeling
         double TargetLag672Mean96,
         double TargetLag672Std96);
 
-    private static readonly FeatureDefinition[] FeatureDefinitions =
+    private static readonly FeatureSchemaEntry[] FeatureSchema =
     [
         new("Temperature", snapshot => (float)snapshot.Temperature),
         new("Windspeed", snapshot => (float)snapshot.Windspeed),
@@ -128,7 +155,7 @@ public static class Part3Modeling
     ];
 
     /// <summary>Feature names in the same index order as <see cref="ToFeatureVector"/>.</summary>
-    public static readonly string[] FeatureNames = FeatureDefinitions.Select(feature => feature.Name).ToArray();
+    public static readonly string[] FeatureNames = FeatureSchema.Select(feature => feature.Name).ToArray();
 
     private const int DaysPerWeek = 7;
     private const int HoursPerDay = 24;
@@ -214,6 +241,7 @@ public static class Part3Modeling
 
     private interface IForecastingModel
     {
+        // Stable seam for adding/removing Part3 models without touching run orchestration.
         string ModelName { get; }
 
         void Train(IReadOnlyList<Part3InputRow> trainRows, IReadOnlyList<Part3InputRow> allRows);
@@ -223,6 +251,7 @@ public static class Part3Modeling
 
     private interface IPermutationImportanceModel
     {
+        // Optional capability seam: only models that support PFI implement this.
         Part3PfiResult? ComputePermutationImportance(IReadOnlyList<Part3InputRow> validationRows, int pfiHorizonStep);
     }
 
@@ -400,6 +429,16 @@ public static class Part3Modeling
             return rows;
         }
 
+        var columns = header.Split(';');
+        var requiredPart2Indexes = RequiredPart2BaseColumns.ToDictionary(
+            name => name,
+            name => FindRequiredPart2ColumnIndex(columns, name, part2DatasetCsvPath),
+            StringComparer.Ordinal);
+        var horizonIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
+            .Select(step => FindRequiredPart2ColumnIndex(columns, $"Target_tPlus{step}", part2DatasetCsvPath))
+            .ToArray();
+        var maxRequiredIndex = Math.Max(requiredPart2Indexes.Values.Max(), horizonIndexes.Length == 0 ? -1 : horizonIndexes.Max());
+
         string? line;
         var lineNumber = 1;
         while ((line = reader.ReadLine()) is not null)
@@ -411,52 +450,52 @@ public static class Part3Modeling
             }
 
             var parts = line.Split(';');
-            if (parts.Length < 24 + PipelineConstants.HorizonSteps)
+            if (parts.Length <= maxRequiredIndex)
             {
-                throw new FormatException($"Invalid row at line {lineNumber}: expected at least {24 + PipelineConstants.HorizonSteps} columns.");
+                throw new FormatException($"Invalid row at line {lineNumber}: expected at least {maxRequiredIndex + 1} columns.");
             }
 
             if (!DateTime.TryParseExact(
-                    parts[0],
+                    parts[requiredPart2Indexes["anchorUtcTime"]],
                     "yyyy-MM-dd HH:mm:ss",
                     InvariantCulture,
                     DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
                     out var anchorUtcTime))
             {
-                throw new FormatException($"Invalid anchorUtcTime at line {lineNumber}: '{parts[0]}'.");
+                throw new FormatException($"Invalid anchorUtcTime at line {lineNumber}: '{parts[requiredPart2Indexes["anchorUtcTime"]]}'.");
             }
 
             var horizonTargets = new double[PipelineConstants.HorizonSteps];
             for (var step = 0; step < PipelineConstants.HorizonSteps; step++)
             {
-                horizonTargets[step] = ParseRequiredDouble(parts[24 + step], lineNumber, $"Target_tPlus{step + 1}");
+                horizonTargets[step] = ParseRequiredDouble(parts[horizonIndexes[step]], lineNumber, $"Target_tPlus{step + 1}");
             }
 
             rows.Add(new Part3InputRow(
                 anchorUtcTime,
-                ParseRequiredDouble(parts[1], lineNumber, nameof(Part3InputRow.TargetAtT)),
-                ParseRequiredDouble(parts[2], lineNumber, nameof(Part3InputRow.Temperature)),
-                ParseRequiredDouble(parts[3], lineNumber, nameof(Part3InputRow.Windspeed)),
-                ParseRequiredDouble(parts[4], lineNumber, nameof(Part3InputRow.SolarIrradiation)),
-                ParseRequiredInt(parts[5], lineNumber, nameof(Part3InputRow.HourOfDay)),
-                ParseRequiredInt(parts[6], lineNumber, nameof(Part3InputRow.MinuteOfHour)),
-                ParseRequiredInt(parts[7], lineNumber, nameof(Part3InputRow.DayOfWeek)),
-                ParseRequiredBool(parts[8], lineNumber, nameof(Part3InputRow.IsHoliday)),
-                ParseRequiredDouble(parts[9], lineNumber, nameof(Part3InputRow.HourSin)),
-                ParseRequiredDouble(parts[10], lineNumber, nameof(Part3InputRow.HourCos)),
-                ParseRequiredDouble(parts[11], lineNumber, nameof(Part3InputRow.WeekdaySin)),
-                ParseRequiredDouble(parts[12], lineNumber, nameof(Part3InputRow.WeekdayCos)),
-                ParseRequiredDouble(parts[13], lineNumber, nameof(Part3InputRow.TargetLag192)),
-                ParseRequiredDouble(parts[14], lineNumber, nameof(Part3InputRow.TargetLag672)),
-                ParseRequiredDouble(parts[15], lineNumber, nameof(Part3InputRow.TargetLag192Mean16)),
-                ParseRequiredDouble(parts[16], lineNumber, nameof(Part3InputRow.TargetLag192Std16)),
-                ParseRequiredDouble(parts[17], lineNumber, nameof(Part3InputRow.TargetLag192Mean96)),
-                ParseRequiredDouble(parts[18], lineNumber, nameof(Part3InputRow.TargetLag192Std96)),
-                ParseRequiredDouble(parts[19], lineNumber, nameof(Part3InputRow.TargetLag672Mean16)),
-                ParseRequiredDouble(parts[20], lineNumber, nameof(Part3InputRow.TargetLag672Std16)),
-                ParseRequiredDouble(parts[21], lineNumber, nameof(Part3InputRow.TargetLag672Mean96)),
-                ParseRequiredDouble(parts[22], lineNumber, nameof(Part3InputRow.TargetLag672Std96)),
-                parts[23],
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetAtT)]], lineNumber, nameof(Part3InputRow.TargetAtT)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.Temperature)]], lineNumber, nameof(Part3InputRow.Temperature)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.Windspeed)]], lineNumber, nameof(Part3InputRow.Windspeed)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.SolarIrradiation)]], lineNumber, nameof(Part3InputRow.SolarIrradiation)),
+                ParseRequiredInt(parts[requiredPart2Indexes[nameof(Part3InputRow.HourOfDay)]], lineNumber, nameof(Part3InputRow.HourOfDay)),
+                ParseRequiredInt(parts[requiredPart2Indexes[nameof(Part3InputRow.MinuteOfHour)]], lineNumber, nameof(Part3InputRow.MinuteOfHour)),
+                ParseRequiredInt(parts[requiredPart2Indexes[nameof(Part3InputRow.DayOfWeek)]], lineNumber, nameof(Part3InputRow.DayOfWeek)),
+                ParseRequiredBool(parts[requiredPart2Indexes[nameof(Part3InputRow.IsHoliday)]], lineNumber, nameof(Part3InputRow.IsHoliday)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.HourSin)]], lineNumber, nameof(Part3InputRow.HourSin)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.HourCos)]], lineNumber, nameof(Part3InputRow.HourCos)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.WeekdaySin)]], lineNumber, nameof(Part3InputRow.WeekdaySin)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.WeekdayCos)]], lineNumber, nameof(Part3InputRow.WeekdayCos)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192)]], lineNumber, nameof(Part3InputRow.TargetLag192)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672)]], lineNumber, nameof(Part3InputRow.TargetLag672)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Mean16)]], lineNumber, nameof(Part3InputRow.TargetLag192Mean16)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Std16)]], lineNumber, nameof(Part3InputRow.TargetLag192Std16)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Mean96)]], lineNumber, nameof(Part3InputRow.TargetLag192Mean96)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag192Std96)]], lineNumber, nameof(Part3InputRow.TargetLag192Std96)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Mean16)]], lineNumber, nameof(Part3InputRow.TargetLag672Mean16)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Std16)]], lineNumber, nameof(Part3InputRow.TargetLag672Std16)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Mean96)]], lineNumber, nameof(Part3InputRow.TargetLag672Mean96)),
+                ParseRequiredDouble(parts[requiredPart2Indexes[nameof(Part3InputRow.TargetLag672Std96)]], lineNumber, nameof(Part3InputRow.TargetLag672Std96)),
+                parts[requiredPart2Indexes["Split"]],
                 horizonTargets));
         }
 
@@ -591,6 +630,7 @@ public static class Part3Modeling
 
     private static List<IForecastingModel> CreateModelRegistry(FastTreeOptions fastTreeOptions)
     {
+        // Single registration point for model lineup keeps RunModels flow closed to branching.
         return
         [
             new BaselineSeasonalForecastingModel(),
@@ -852,7 +892,7 @@ public static class Part3Modeling
     {
         var schema = SchemaDefinition.Create(typeof(OneStepModelInput));
         var featuresColumn = schema[nameof(OneStepModelInput.Features)];
-        featuresColumn.ColumnType = new VectorDataViewType(NumberDataViewType.Single, FeatureDefinitions.Length);
+        featuresColumn.ColumnType = new VectorDataViewType(NumberDataViewType.Single, FeatureSchema.Length);
         var slotNames = new VBuffer<ReadOnlyMemory<char>>(
             FeatureNames.Length,
             FeatureNames.Select(n => n.AsMemory()).ToArray());
@@ -944,7 +984,7 @@ public static class Part3Modeling
         var lastSolar = anchor.SolarIrradiation;
 
         // Reuse a single training row and feature array across all 192 steps to avoid ~14M allocations.
-        var features = new float[FeatureDefinitions.Length];
+        var features = new float[FeatureSchema.Length];
         var reusableRow = new OneStepModelInput { Features = features };
 
         for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
@@ -981,24 +1021,31 @@ public static class Part3Modeling
             var dayOfWeek = (int)currentTime.DayOfWeek;
             var cyclic = CyclicLookup[GetCyclicLookupIndex(currentTime)];
 
-            // Fill feature vector directly (must stay in sync with FeatureDefinitions order).
-            features[0] = (float)temperature;
-            features[1] = (float)windspeed;
-            features[2] = (float)solar;
-            features[3] = hour;
-            features[4] = minute;
-            features[5] = dayOfWeek;
-            features[6] = hasContext && contextRow!.IsHoliday ? 1f : 0f;
-            features[7] = cyclic.HourSin;
-            features[8] = cyclic.HourCos;
-            features[9] = cyclic.WeekdaySin;
-            features[10] = cyclic.WeekdayCos;
-            features[11] = (float)targetLag192;
-            features[12] = (float)targetLag672;
-            features[13] = (float)targetLag192Rolling16.Mean;
-            features[14] = (float)targetLag192Rolling16.Std;
-            features[15] = (float)targetLag192Rolling96.Mean;
-            features[16] = (float)targetLag192Rolling96.Std;
+            // Canonical feature projection for recursive inference state.
+            FillFeatureVector(new FeatureSnapshot(
+                targetAtT,
+                temperature,
+                windspeed,
+                solar,
+                hour,
+                minute,
+                dayOfWeek,
+                hasContext && contextRow!.IsHoliday,
+                cyclic.HourSin,
+                cyclic.HourCos,
+                cyclic.WeekdaySin,
+                cyclic.WeekdayCos,
+                targetLag192,
+                targetLag672,
+                targetLag192Rolling16.Mean,
+                targetLag192Rolling16.Std,
+                targetLag192Rolling96.Mean,
+                targetLag192Rolling96.Std,
+                anchor.TargetLag672Mean16,
+                anchor.TargetLag672Std16,
+                anchor.TargetLag672Mean96,
+                anchor.TargetLag672Std96),
+                features);
 
             var score = model.PredictionEngine.Predict(reusableRow).Score;
             var predicted = double.IsFinite(score) ? score : targetAtT;
@@ -1083,13 +1130,23 @@ public static class Part3Modeling
 
     private static float[] ToFeatureVector(FeatureSnapshot snapshot)
     {
-        var values = new float[FeatureDefinitions.Length];
-        for (var index = 0; index < FeatureDefinitions.Length; index++)
-        {
-            values[index] = FeatureDefinitions[index].Selector(snapshot);
-        }
+        var values = new float[FeatureSchema.Length];
+        FillFeatureVector(snapshot, values);
 
         return values;
+    }
+
+    private static void FillFeatureVector(FeatureSnapshot snapshot, Span<float> destination)
+    {
+        if (destination.Length < FeatureSchema.Length)
+        {
+            throw new ArgumentException($"Destination span must be at least {FeatureSchema.Length} elements.", nameof(destination));
+        }
+
+        for (var index = 0; index < FeatureSchema.Length; index++)
+        {
+            destination[index] = FeatureSchema[index].Selector(snapshot);
+        }
     }
 
     private static double ParseRequiredDouble(string value, int lineNumber, string columnName)
@@ -1133,5 +1190,18 @@ public static class Part3Modeling
         }
 
         throw new FormatException($"Missing required column '{name}' in forecasts CSV.");
+    }
+
+    private static int FindRequiredPart2ColumnIndex(IReadOnlyList<string> columns, string name, string part2DatasetCsvPath)
+    {
+        for (var index = 0; index < columns.Count; index++)
+        {
+            if (string.Equals(columns[index], name, StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+
+        throw new FormatException($"Missing required column '{name}' in part2 supervised dataset '{part2DatasetCsvPath}'.");
     }
 }

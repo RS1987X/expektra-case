@@ -261,14 +261,92 @@ This minimizes conflict risk and makes reviews behavior-focused.
 
 ### Scope
 
-- Centralize feature schema metadata and mapping logic used by Part2/Part3.
+- Centralize model-input feature schema metadata and mapping logic consumed by Part3 from the Part2 supervised output contract.
 - Eliminate dual/duplicated feature-vector mapping paths.
 - Keep current CSV column names/order unless explicitly versioned.
+
+### Detailed design (implementation-ready)
+
+- Introduce a single canonical feature contract owned by Part3-facing training/inference paths:
+  - Add a `FeatureSchema` descriptor for all model-vector inputs after normalization/casting.
+  - Add a single `FeatureProjector` (or equivalent) that converts one supervised row into an ordered `float[]` using that schema.
+  - Keep target/label mapping and metadata mapping explicit (no implicit reflection-based mapping).
+- Drive both Part3 training and Part3 recursive inference feature-vector construction through this same projector.
+- Keep Part2 output contract unchanged in this phase:
+  - no CSV header rename,
+  - no column reorder,
+  - no new required columns.
+- Fail fast for schema drift:
+  - if a required feature column is missing from the Part2 header, throw/return an explicit validation error.
+  - error text must include the missing column name and artifact context (`part2_supervised_matrix.csv` or provided equivalent path).
+  - keep error shape deterministic so it can be asserted in tests.
+
+### Ownership boundaries
+
+- Ownership intent clarification:
+  - Phase 3 centralizes the model-input feature contract at the Part3 consumption boundary.
+  - This does not move Part1 feature-engineering ownership into Part3.
+  - Part1/Part2 remain upstream producers; Part3 owns canonical projection of produced columns into model vectors.
+- Part2 owns:
+  - emitting supervised rows and their CSV contract.
+- Phase 3 feature contract module owns:
+  - canonical ordered feature list,
+  - row-to-feature-vector projection rules,
+  - required-column validation for model feature consumption.
+- Part3 modeling orchestration owns:
+  - model registry execution,
+  - train/predict loops,
+  - calling the canonical projector (not rebuilding vectors locally).
+
+### Migration steps (small diffs)
+
+1. Add characterization tests pinning current feature-vector equivalence (train and inference paths).
+2. Introduce canonical schema + projector in Part3 area without removing old path yet.
+3. Switch Part3 training path to canonical projector.
+4. Switch Part3 recursive inference path to canonical projector.
+5. Remove duplicated/legacy vector mapping path after tests confirm parity.
+6. Keep file formats and CLI behavior unchanged.
+
+### Non-goals (explicitly out of scope)
+
+- No new engineered features in this phase.
+- No Part2 CSV contract changes.
+- No model algorithm changes or hyperparameter tuning redesign.
+- No shared CSV index/parse utility extraction (that is Phase 4).
+
+### Acceptance test matrix for Phase 3
+
+- Feature mapping parity:
+  - canonical projector produces equivalent vectors to baseline mapping on both `Train` and `Validation` splits.
+  - parity must be validated for both Part3 paths: training vector construction and recursive inference vector construction.
+  - vector equivalence must use exact equality for deterministic fields, or an explicitly documented numeric tolerance where required.
+- Part3 outputs:
+  - prediction row counts and model labels remain unchanged for the same input.
+  - summary artifact shape remains unchanged.
+- Validation behavior:
+  - missing required feature columns fail with explicit, deterministic error messages.
+
+### Verification additions
+
+- Run:
+  - `dotnet build ExpekraCase.sln`
+  - `dotnet test ExpekraCase.sln`
+  - `dotnet test ExpekraCase.sln --collect:"XPlat Code Coverage"`
+- Coverage gate for touched Part3 modules:
+  - target branch coverage >= 75%, or document no-regression baseline with follow-up.
 
 ### Exit criteria
 
 - One canonical feature mapping path.
 - Reduced break risk when adding a feature.
+
+### Definition of done for Phase 3 PR
+
+- Legacy duplicated Part3 vector-mapping path is removed.
+- Canonical schema/projector is used by both training and recursive inference paths.
+- Part2 CSV header/order remains unchanged and existing CLI modes/flags remain unchanged.
+- Added/updated tests cover parity (Train/Validation + both paths) and deterministic missing-column errors.
+- `dotnet build ExpekraCase.sln`, `dotnet test ExpekraCase.sln`, and coverage run complete successfully.
 
 ## Phase 4: Shared CSV/Parsing Utilities
 
@@ -276,6 +354,37 @@ This minimizes conflict risk and makes reviews behavior-focused.
 
 - Consolidate duplicated CSV index/parse helper logic across Part3/Part4/Diagnostics.
 - Keep strict validation behavior and explicit error messages.
+
+### Detailed design (implementation-ready)
+
+- Extract shared CSV header/index helpers into a focused utility (for example under `src/Forecasting.App/Csv/`).
+- Shared utility responsibilities:
+  - resolve required column indexes by header name,
+  - provide typed parse helpers (`int`, `float`, `DateTime`) with explicit field-name-aware errors,
+  - avoid silent defaulting for malformed required fields.
+- Keep domain rules outside the shared parser utility:
+  - metric semantics, horizon logic, split logic, and model-specific assumptions stay in owning modules.
+
+### Migration steps (small diffs)
+
+1. Add tests for shared helper behavior and error messages.
+2. Migrate one consumer first (Part4 recommended) and verify no behavior change.
+3. Migrate remaining consumers (Part3, Diagnostics).
+4. Remove duplicated helper code after all consumers use shared utility.
+
+### Non-goals (explicitly out of scope)
+
+- No feature-schema redesign (completed in Phase 3).
+- No artifact format or header changes.
+- No change to CLI surface area.
+
+### Verification additions
+
+- Run:
+  - `dotnet build ExpekraCase.sln`
+  - `dotnet test ExpekraCase.sln`
+  - `dotnet test ExpekraCase.sln --collect:"XPlat Code Coverage"`
+- Add regression tests asserting unchanged error-message shape for common parse failures.
 
 ### Exit criteria
 
@@ -303,10 +412,10 @@ This minimizes conflict risk and makes reviews behavior-focused.
 
 ## Practical Next Step
 
-Phase 0 is completed on this branch.
+Phase 2 is completed and the current workstream is Phase 3.
 
-Start Phase 1 in a dedicated branch from `master`, for example:
+Start Phase 3 in a dedicated branch from `master`, for example:
 
-- `refactor/phase1-orchestration-extraction`
+- `refactor/phase3-feature-contract-centralization`
 
-Then proceed sequentially with Phase 2+ branches.
+After merge, continue with Phase 4 in a new child branch.
