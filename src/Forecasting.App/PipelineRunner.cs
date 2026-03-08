@@ -84,8 +84,7 @@ public static class PipelineRunner
         Part2FeatureEngineering.WriteSummaryJson(part2Dataset.Summary, part2SummaryPath);
         AddOutputLine(lines, $"Part 2 complete: {part2Dataset.Summary.OutputRows} rows -> {part2OutputPath} (validation window: {validationWindowDays} days)", output);
 
-        var part3Rows = Part3Modeling.FromPart2DatasetRows(part2Dataset.Rows);
-        part3Rows = ApplyPart3RowLimit(part3Rows, request.MaxPart3Rows, lines, output);
+        var part3Rows = ApplyPart3RowLimit(part2Dataset.Rows, request.MaxPart3Rows, lines, output);
         var part3Result = Part3Modeling.RunModels(part3Rows, enablePfi: request.EnablePfi, pfiHorizonStep: request.PfiHorizonStep);
         Part3Modeling.WriteForecastsCsv(part3Result.Forecasts, part3OutputPath);
         Part3Modeling.WriteSummaryJson(part3Result.Summary, part3SummaryPath);
@@ -367,15 +366,15 @@ public static class PipelineRunner
         return values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
     }
 
-    private static List<Part3InputRow> ApplyPart3RowLimit(
-        IReadOnlyList<Part3InputRow> rows,
+    private static List<Part2SupervisedRow> ApplyPart3RowLimit(
+        IReadOnlyList<Part2SupervisedRow> rows,
         int? maxPart3Rows,
         ICollection<string>? lines,
         Action<string>? output)
     {
         if (!maxPart3Rows.HasValue)
         {
-            return rows as List<Part3InputRow> ?? rows.ToList();
+            return rows as List<Part2SupervisedRow> ?? rows.ToList();
         }
 
         if (rows.Count <= maxPart3Rows.Value)

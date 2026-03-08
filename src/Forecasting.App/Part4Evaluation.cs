@@ -38,7 +38,7 @@ public static class Part4Evaluation
     }
 
     public static Part4RunResult RunEvaluation(
-        IReadOnlyList<Part3InputRow> part2Rows,
+        IReadOnlyList<Part2SupervisedRow> part2Rows,
         IReadOnlyList<Part3ForecastRow> forecastRows)
     {
         ValidateForecastRows(forecastRows);
@@ -210,7 +210,7 @@ public static class Part4Evaluation
         return sample;
     }
 
-    private static Dictionary<DateTime, double[]> BuildValidationActualLookup(IReadOnlyList<Part3InputRow> rows)
+    private static Dictionary<DateTime, double[]> BuildValidationActualLookup(IReadOnlyList<Part2SupervisedRow> rows)
     {
         var lookup = new Dictionary<DateTime, double[]>();
         foreach (var row in rows)

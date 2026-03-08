@@ -99,8 +99,8 @@ Use this flow to add a new forecasting model without changing central orchestrat
 1. Implement the model contract in `src/Forecasting.App/Part3Modeling.cs`:
 	- Add a class implementing `IForecastingModel` with:
 		- `ModelName` (stable output name written to artifacts)
-		- `Train(IReadOnlyList<Part3InputRow> trainRows, IReadOnlyList<Part3InputRow> allRows)`
-		- `Predict(Part3InputRow anchor)` returning `(Predictions, FallbackSteps)`
+		- `Train(IReadOnlyList<Part2SupervisedRow> trainRows, IReadOnlyList<Part2SupervisedRow> allRows)`
+		- `Predict(Part2SupervisedRow anchor)` returning `(Predictions, FallbackSteps)`
 2. If the model supports permutation feature importance, also implement `IPermutationImportanceModel` and return `Part3PfiResult` from `ComputePermutationImportance(...)`.
 3. Register the model in `CreateModelRegistry(...)` in `src/Forecasting.App/Part3Modeling.cs`.
 4. Keep output contract compatibility:

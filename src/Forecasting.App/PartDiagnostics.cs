@@ -155,7 +155,7 @@ public static class PartDiagnostics
     }
 
     public static DiagnosticsRunResult RunDiagnostics(
-        IReadOnlyList<Part3InputRow> rows,
+        IReadOnlyList<Part2SupervisedRow> rows,
         IReadOnlyList<Part3ForecastRow> forecasts,
         IReadOnlyList<Part3PfiFeatureResult>? featureImportance = null)
     {
@@ -427,7 +427,7 @@ public static class PartDiagnostics
         File.WriteAllText(outputHtmlPath, sb.ToString());
     }
 
-    private static List<DiagnosticsPreModelSummary> BuildPreModelSummaries(IReadOnlyList<Part3InputRow> rows)
+    private static List<DiagnosticsPreModelSummary> BuildPreModelSummaries(IReadOnlyList<Part2SupervisedRow> rows)
     {
         var summaries = new List<DiagnosticsPreModelSummary>();
         foreach (var splitRows in rows.GroupBy(row => NormalizeSplit(row.Split), StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal))
@@ -452,7 +452,7 @@ public static class PartDiagnostics
         return summaries;
     }
 
-    private static List<DiagnosticsCadenceSummary> BuildCadenceSummaries(IReadOnlyList<Part3InputRow> rows)
+    private static List<DiagnosticsCadenceSummary> BuildCadenceSummaries(IReadOnlyList<Part2SupervisedRow> rows)
     {
         var summaries = new List<DiagnosticsCadenceSummary>();
         foreach (var splitRows in rows.GroupBy(row => NormalizeSplit(row.Split), StringComparer.Ordinal).OrderBy(group => group.Key, StringComparer.Ordinal))
@@ -501,7 +501,7 @@ public static class PartDiagnostics
         return summaries;
     }
 
-    private static Dictionary<(string Split, DateTime AnchorUtcTime), double[]> BuildActualLookup(IReadOnlyList<Part3InputRow> rows)
+    private static Dictionary<(string Split, DateTime AnchorUtcTime), double[]> BuildActualLookup(IReadOnlyList<Part2SupervisedRow> rows)
     {
         var lookup = new Dictionary<(string Split, DateTime AnchorUtcTime), double[]>();
         foreach (var row in rows)

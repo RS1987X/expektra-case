@@ -220,9 +220,9 @@ public class Phase0CharacterizationTests
         Assert.All(result.Summary.Models, model => Assert.Equal(PipelineConstants.HorizonSteps, model.HorizonSteps));
     }
 
-    private static List<Part3InputRow> BuildSyntheticPart3Rows(int trainCount, int validationCount)
+    private static List<Part2SupervisedRow> BuildSyntheticPart3Rows(int trainCount, int validationCount)
     {
-        var rows = new List<Part3InputRow>(trainCount + validationCount);
+        var rows = new List<Part2SupervisedRow>(trainCount + validationCount);
         var start = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
         for (var index = 0; index < trainCount + validationCount; index++)
@@ -246,7 +246,7 @@ public class Phase0CharacterizationTests
             var hourAngle = 2d * Math.PI * (hour / 24d);
             var weekdayAngle = 2d * Math.PI * (dayOfWeek / 7d);
 
-            rows.Add(new Part3InputRow(
+            rows.Add(new Part2SupervisedRow(
                 utcTime,
                 target,
                 temperature,
