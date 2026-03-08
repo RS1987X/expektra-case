@@ -72,30 +72,22 @@ public static class Part2FeatureEngineering
                 throw new FormatException($"Invalid row at line {lineNumber}: expected at least 13 columns.");
             }
 
-            if (!DateTime.TryParseExact(
-                    parts[0],
-                    "yyyy-MM-dd HH:mm:ss",
-                    InvariantCulture,
-                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                    out var utcTime))
-            {
-                throw new FormatException($"Invalid utcTime at line {lineNumber}: '{parts[0]}'.");
-            }
+            var utcTime = CsvParsing.ParseRequiredUtcDateTime(parts[0], lineNumber, "utcTime");
 
             rows.Add(new FeatureRow(
                 utcTime,
-                ParseRequiredDouble(parts[1], lineNumber, "Target"),
-                ParseRequiredDouble(parts[2], lineNumber, "Temperature"),
-                ParseRequiredDouble(parts[3], lineNumber, "Windspeed"),
-                ParseRequiredDouble(parts[4], lineNumber, "SolarIrradiation"),
-                ParseRequiredInt(parts[5], lineNumber, "HourOfDay"),
-                ParseRequiredInt(parts[6], lineNumber, "MinuteOfHour"),
-                ParseRequiredInt(parts[7], lineNumber, "DayOfWeek"),
-                ParseRequiredBool(parts[8], lineNumber, "IsHoliday"),
-                ParseRequiredDouble(parts[9], lineNumber, "HourSin"),
-                ParseRequiredDouble(parts[10], lineNumber, "HourCos"),
-                ParseRequiredDouble(parts[11], lineNumber, "WeekdaySin"),
-                ParseRequiredDouble(parts[12], lineNumber, "WeekdayCos")));
+                CsvParsing.ParseRequiredDouble(parts[1], lineNumber, "Target"),
+                CsvParsing.ParseRequiredDouble(parts[2], lineNumber, "Temperature"),
+                CsvParsing.ParseRequiredDouble(parts[3], lineNumber, "Windspeed"),
+                CsvParsing.ParseRequiredDouble(parts[4], lineNumber, "SolarIrradiation"),
+                CsvParsing.ParseRequiredInt(parts[5], lineNumber, "HourOfDay"),
+                CsvParsing.ParseRequiredInt(parts[6], lineNumber, "MinuteOfHour"),
+                CsvParsing.ParseRequiredInt(parts[7], lineNumber, "DayOfWeek"),
+                CsvParsing.ParseRequiredBool(parts[8], lineNumber, "IsHoliday"),
+                CsvParsing.ParseRequiredDouble(parts[9], lineNumber, "HourSin"),
+                CsvParsing.ParseRequiredDouble(parts[10], lineNumber, "HourCos"),
+                CsvParsing.ParseRequiredDouble(parts[11], lineNumber, "WeekdaySin"),
+                CsvParsing.ParseRequiredDouble(parts[12], lineNumber, "WeekdayCos")));
         }
 
         return rows;
@@ -105,7 +97,7 @@ public static class Part2FeatureEngineering
     {
         var sorted = inputRows.OrderBy(row => row.UtcTime).ToList();
         var inputRowsBeforeDeduplication = sorted.Count;
-        sorted = DeduplicateByUtcTimeKeepLast(sorted, out var droppedDuplicateTimestampRows);
+        sorted = CollectionHelpers.DeduplicateByKeyKeepLast(sorted, row => row.UtcTime, out var droppedDuplicateTimestampRows);
 
         if (sorted.Count == 0)
         {
@@ -245,11 +237,7 @@ public static class Part2FeatureEngineering
 
     public static void WriteDatasetCsv(IReadOnlyList<Part2SupervisedRow> rows, string outputCsvPath)
     {
-        var directory = Path.GetDirectoryName(outputCsvPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        FileOutput.EnsureParentDirectory(outputCsvPath);
 
         using var writer = new StreamWriter(outputCsvPath, false);
         var horizonColumns = Enumerable.Range(1, PipelineConstants.HorizonSteps).Select(step => $"Target_tPlus{step}");
@@ -319,11 +307,7 @@ public static class Part2FeatureEngineering
 
     public static void WriteSummaryJson(Part2DatasetSummary summary, string outputJsonPath)
     {
-        var directory = Path.GetDirectoryName(outputJsonPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        FileOutput.EnsureParentDirectory(outputJsonPath);
 
         var json = JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(outputJsonPath, json);
@@ -356,51 +340,4 @@ public static class Part2FeatureEngineering
         return Math.Sqrt(sumSquaredDiff / count);
     }
 
-    private static List<FeatureRow> DeduplicateByUtcTimeKeepLast(IReadOnlyList<FeatureRow> rows, out int droppedRows)
-    {
-        if (rows.Count == 0)
-        {
-            droppedRows = 0;
-            return [];
-        }
-
-        var deduplicated = rows
-            .GroupBy(row => row.UtcTime)
-            .Select(group => group.Last())
-            .OrderBy(row => row.UtcTime)
-            .ToList();
-
-        droppedRows = rows.Count - deduplicated.Count;
-        return deduplicated;
-    }
-
-    private static double ParseRequiredDouble(string value, int lineNumber, string columnName)
-    {
-        if (!double.TryParse(value, NumberStyles.Float, InvariantCulture, out var parsed))
-        {
-            throw new FormatException($"Invalid {columnName} at line {lineNumber}: '{value}'.");
-        }
-
-        return parsed;
-    }
-
-    private static int ParseRequiredInt(string value, int lineNumber, string columnName)
-    {
-        if (!int.TryParse(value, NumberStyles.Integer, InvariantCulture, out var parsed))
-        {
-            throw new FormatException($"Invalid {columnName} at line {lineNumber}: '{value}'.");
-        }
-
-        return parsed;
-    }
-
-    private static bool ParseRequiredBool(string value, int lineNumber, string columnName)
-    {
-        if (!bool.TryParse(value, out var parsed))
-        {
-            throw new FormatException($"Invalid {columnName} at line {lineNumber}: '{value}'.");
-        }
-
-        return parsed;
-    }
 }

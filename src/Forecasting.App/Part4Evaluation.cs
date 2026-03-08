@@ -30,14 +30,12 @@ public static class Part4Evaluation
 {
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
 
-    private sealed record PredictionPoint(string ModelName, DateTime AnchorUtcTime, int HorizonStep, double Predicted, string Split);
-
     private sealed record ActualPoint(DateTime AnchorUtcTime, int HorizonStep, double Actual);
 
     public static Part4RunResult RunEvaluation(string part2InputCsvPath, string part3PredictionsCsvPath)
     {
         var part2Rows = Part3Modeling.ReadPart2DatasetCsv(part2InputCsvPath);
-        var predictionPoints = ReadPredictionPoints(part3PredictionsCsvPath);
+        var predictionPoints = PredictionPoints.ReadFromPredictionsCsv(part3PredictionsCsvPath);
         return RunEvaluation(part2Rows, predictionPoints);
     }
 
@@ -45,13 +43,13 @@ public static class Part4Evaluation
         IReadOnlyList<Part3InputRow> part2Rows,
         IReadOnlyList<Part3ForecastRow> forecastRows)
     {
-        var predictionPoints = BuildPredictionPoints(forecastRows);
+        var predictionPoints = PredictionPoints.BuildFromForecastRows(forecastRows);
         return RunEvaluation(part2Rows, predictionPoints);
     }
 
     private static Part4RunResult RunEvaluation(
         IReadOnlyList<Part3InputRow> part2Rows,
-        IReadOnlyList<PredictionPoint> predictionPoints)
+        IReadOnlyList<ForecastPredictionPoint> predictionPoints)
     {
         var actualPoints = BuildValidationActualPoints(part2Rows);
         var actualLookup = BuildActualLookup(actualPoints);
@@ -73,7 +71,7 @@ public static class Part4Evaluation
 
     public static void WriteMetricsCsv(Part4RunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
 
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("ModelName;EvaluatedPoints;MapeEvaluatedPoints;ZeroActualExcludedPoints;MAE;RMSE;MAPE");
@@ -93,7 +91,7 @@ public static class Part4Evaluation
 
     public static void WriteSampleCsv(Part4RunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
 
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("ModelName;AnchorUtcTime;ForecastUtcTime;HorizonStep;Predicted;Actual");
@@ -113,7 +111,7 @@ public static class Part4Evaluation
     }
 
     private static List<Part4ModelMetrics> ComputeMetrics(
-        IReadOnlyList<PredictionPoint> predictionPoints,
+        IReadOnlyList<ForecastPredictionPoint> predictionPoints,
         IReadOnlyDictionary<(DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var accumulators = new Dictionary<string, MetricsAccumulator>(StringComparer.Ordinal);
@@ -181,7 +179,7 @@ public static class Part4Evaluation
     }
 
     private static List<Part4SamplePoint> BuildDeterministicSample(
-        IReadOnlyList<PredictionPoint> predictionPoints,
+        IReadOnlyList<ForecastPredictionPoint> predictionPoints,
         IReadOnlyDictionary<(DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var firstAnchor = predictionPoints
@@ -257,139 +255,6 @@ public static class Part4Evaluation
         }
 
         return points;
-    }
-
-    private static List<PredictionPoint> ReadPredictionPoints(string predictionsCsvPath)
-    {
-        var points = new List<PredictionPoint>();
-        using var reader = new StreamReader(predictionsCsvPath);
-
-        var header = reader.ReadLine();
-        if (string.IsNullOrWhiteSpace(header))
-        {
-            return points;
-        }
-
-        var columns = header.Split(';');
-        var anchorIndex = FindRequiredIndex(columns, "anchorUtcTime");
-        var splitIndex = FindRequiredIndex(columns, "Split");
-        var modelIndex = FindRequiredIndex(columns, "Model");
-        var predictedIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
-            .Select(step => FindRequiredIndex(columns, $"Pred_tPlus{step}"))
-            .ToArray();
-
-        var seenKeys = new HashSet<(string ModelName, DateTime AnchorUtcTime, int HorizonStep)>();
-        string? line;
-        var lineNumber = 1;
-        while ((line = reader.ReadLine()) is not null)
-        {
-            lineNumber++;
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            var parts = line.Split(';');
-            if (parts.Length < columns.Length)
-            {
-                throw new FormatException($"Invalid prediction row at line {lineNumber}: expected {columns.Length} columns.");
-            }
-
-            if (!DateTime.TryParseExact(
-                    parts[anchorIndex],
-                    "yyyy-MM-dd HH:mm:ss",
-                    InvariantCulture,
-                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                    out var anchorUtcTime))
-            {
-                throw new FormatException($"Invalid anchorUtcTime at line {lineNumber}: '{parts[anchorIndex]}'.");
-            }
-
-            var split = parts[splitIndex];
-            var modelName = parts[modelIndex];
-
-            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
-            {
-                var predicted = ParseRequiredDouble(parts[predictedIndexes[step - 1]], lineNumber, $"Pred_tPlus{step}");
-                var key = (modelName, anchorUtcTime, step);
-                if (!seenKeys.Add(key))
-                {
-                    throw new InvalidOperationException(
-                        $"Duplicate prediction key for model '{modelName}', anchor '{anchorUtcTime:yyyy-MM-dd HH:mm:ss}', horizon '{step}'.");
-                }
-
-                points.Add(new PredictionPoint(modelName, anchorUtcTime, step, predicted, split));
-            }
-        }
-
-        return points;
-    }
-
-    private static List<PredictionPoint> BuildPredictionPoints(IReadOnlyList<Part3ForecastRow> forecastRows)
-    {
-        var points = new List<PredictionPoint>();
-        var seenKeys = new HashSet<(string ModelName, DateTime AnchorUtcTime, int HorizonStep)>();
-
-        foreach (var row in forecastRows)
-        {
-            if (row.PredictedTargets.Count < PipelineConstants.HorizonSteps)
-            {
-                throw new FormatException(
-                    $"Invalid in-memory forecast row for model '{row.ModelName}' at anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}': expected {PipelineConstants.HorizonSteps} predicted targets.");
-            }
-
-            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
-            {
-                var predicted = row.PredictedTargets[step - 1];
-                var key = (row.ModelName, row.AnchorUtcTime, step);
-                if (!seenKeys.Add(key))
-                {
-                    throw new InvalidOperationException(
-                        $"Duplicate prediction key for model '{row.ModelName}', anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}', horizon '{step}'.");
-                }
-
-                points.Add(new PredictionPoint(row.ModelName, row.AnchorUtcTime, step, predicted, row.Split));
-            }
-        }
-
-        return points;
-    }
-
-    private static int FindRequiredIndex(IReadOnlyList<string> columns, string name)
-    {
-        for (var index = 0; index < columns.Count; index++)
-        {
-            if (string.Equals(columns[index], name, StringComparison.Ordinal))
-            {
-                return index;
-            }
-        }
-
-        throw new FormatException($"Missing required column '{name}' in predictions CSV.");
-    }
-
-    private static double ParseRequiredDouble(string value, int lineNumber, string columnName)
-    {
-        if (!double.TryParse(value, NumberStyles.Float, InvariantCulture, out var parsed))
-        {
-            throw new FormatException($"Invalid {columnName} at line {lineNumber}: '{value}'.");
-        }
-
-        if (!double.IsFinite(parsed))
-        {
-            throw new FormatException($"Invalid {columnName} at line {lineNumber}: non-finite value '{value}'.");
-        }
-
-        return parsed;
-    }
-
-    private static void EnsureOutputDirectory(string path)
-    {
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
     }
 
     private sealed class MetricsAccumulator

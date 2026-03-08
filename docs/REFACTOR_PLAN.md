@@ -354,16 +354,32 @@ This minimizes conflict risk and makes reviews behavior-focused.
 
 - Consolidate duplicated CSV index/parse helper logic across Part3/Part4/Diagnostics.
 - Keep strict validation behavior and explicit error messages.
+- Improve code readability by standardizing placement/order of parsing helpers and related local utilities in touched modules.
 
 ### Detailed design (implementation-ready)
 
 - Extract shared CSV header/index helpers into a focused utility (for example under `src/Forecasting.App/Csv/`).
 - Shared utility responsibilities:
   - resolve required column indexes by header name,
-  - provide typed parse helpers (`int`, `float`, `DateTime`) with explicit field-name-aware errors,
+  - provide typed parse helpers (`int`, `float`, `double`, `bool`, `DateTime`) with explicit field-name-aware errors,
   - avoid silent defaulting for malformed required fields.
+- Shared error contract requirements:
+  - required-column failures must include missing column name and dataset context/path,
+  - parse failures must include field name, line number, and offending value,
+  - error message shape must remain deterministic for test assertions.
 - Keep domain rules outside the shared parser utility:
   - metric semantics, horizon logic, split logic, and model-specific assumptions stay in owning modules.
+  - utility code must not encode horizon-step assumptions or model/split-specific branching.
+
+### Readability and ordering policy (implementation guardrail)
+
+- In each touched module, keep method ordering consistent and scan-friendly:
+  - public entry points first,
+  - core domain flow next,
+  - shared/helper parse/index methods near bottom (or delegated to shared utility),
+  - small private validation helpers colocated with the logic they support.
+- Prefer names that expose intent (`FindRequiredColumnIndex`, `ParseRequiredDouble`, etc.) over generic utility names.
+- Add succinct comments only where intent is non-obvious (for example seam boundaries or validation invariants).
 
 ### Migration steps (small diffs)
 
@@ -372,11 +388,24 @@ This minimizes conflict risk and makes reviews behavior-focused.
 3. Migrate remaining consumers (Part3, Diagnostics).
 4. Remove duplicated helper code after all consumers use shared utility.
 
+### Per-consumer migration acceptance gates
+
+- Part4 migration gate:
+  - no metric/output CSV header/order changes,
+  - parse/validation failure messages match expected deterministic shape.
+- Part3 migration gate:
+  - no prediction/summary artifact format changes,
+  - required-column and parse failures still include deterministic context (column/field + path/line/value as applicable).
+- Diagnostics migration gate:
+  - no diagnostics artifact shape/grouping regressions,
+  - parse/validation behavior remains deterministic and explicit.
+
 ### Non-goals (explicitly out of scope)
 
 - No feature-schema redesign (completed in Phase 3).
 - No artifact format or header changes.
 - No change to CLI surface area.
+- No broad CSV I/O performance optimization (streaming redesign, async I/O conversion, buffering strategy overhaul).
 
 ### Verification additions
 
@@ -385,11 +414,14 @@ This minimizes conflict risk and makes reviews behavior-focused.
   - `dotnet test ExpekraCase.sln`
   - `dotnet test ExpekraCase.sln --collect:"XPlat Code Coverage"`
 - Add regression tests asserting unchanged error-message shape for common parse failures.
+- Add a quick smoke run to confirm cross-part orchestration remains intact after helper migration:
+  - `dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- all --max-rows 120`
 
 ### Exit criteria
 
 - Parsing logic is unified and tested.
 - No output contract regressions.
+- Touched modules satisfy readability/ordering policy (method/helper placement is consistent and easy to scan).
 
 ## Phase 5: Optional Scalability Layer
 

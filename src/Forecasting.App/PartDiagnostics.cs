@@ -104,8 +104,6 @@ public static class PartDiagnostics
     private const string OverlayModelName = "FastTreeRecursive";
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
 
-    private sealed record PredictionPoint(string ModelName, DateTime AnchorUtcTime, int HorizonStep, double Predicted, string Split);
-
     private sealed record ActualPoint(DateTime AnchorUtcTime, int HorizonStep, double Actual);
 
     private sealed class RunningStats
@@ -145,7 +143,7 @@ public static class PartDiagnostics
     public static DiagnosticsRunResult RunDiagnostics(string part2InputCsvPath, string part3PredictionsCsvPath, string? pfiCsvPath)
     {
         var rows = Part3Modeling.ReadPart2DatasetCsv(part2InputCsvPath);
-        var predictions = ReadPredictionPoints(part3PredictionsCsvPath);
+        var predictions = PredictionPoints.ReadFromPredictionsCsv(part3PredictionsCsvPath);
 
         IReadOnlyList<Part3PfiFeatureResult>? featureImportance = null;
         if (!string.IsNullOrWhiteSpace(pfiCsvPath) && File.Exists(pfiCsvPath))
@@ -161,13 +159,13 @@ public static class PartDiagnostics
         IReadOnlyList<Part3ForecastRow> forecastRows,
         IReadOnlyList<Part3PfiFeatureResult>? featureImportance = null)
     {
-        var predictions = BuildPredictionPoints(forecastRows);
+        var predictions = PredictionPoints.BuildFromForecastRows(forecastRows);
         return RunDiagnostics(rows, predictions, featureImportance);
     }
 
     private static DiagnosticsRunResult RunDiagnostics(
         IReadOnlyList<Part3InputRow> rows,
-        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyList<ForecastPredictionPoint> predictions,
         IReadOnlyList<Part3PfiFeatureResult>? featureImportance)
     {
         var preModel = BuildPreModelSummaries(rows);
@@ -222,7 +220,7 @@ public static class PartDiagnostics
 
     public static void WriteValidationHorizonCsv(DiagnosticsRunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("ModelName;HorizonStep;EvaluatedPoints;MeanError;MAE;RMSE;UnderPredictionRate;OverPredictionRate");
 
@@ -244,7 +242,7 @@ public static class PartDiagnostics
 
     public static void WriteValidationHorizonSvg(DiagnosticsRunResult result, string outputSvgPath)
     {
-        EnsureOutputDirectory(outputSvgPath);
+        FileOutput.EnsureParentDirectory(outputSvgPath);
         File.WriteAllText(outputSvgPath, BuildValidationHorizonSvg(result.ValidationHorizonSummaries));
     }
 
@@ -271,7 +269,7 @@ public static class PartDiagnostics
 
     private static void WriteSplitOverlayCsv(IReadOnlyList<DiagnosticsOverlayPoint> points, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("Split;ModelName;HorizonStep;ForecastUtcTime;Actual;Predicted;Residual");
 
@@ -291,14 +289,14 @@ public static class PartDiagnostics
 
     public static void WriteTargetSeriesSvg(DiagnosticsRunResult result, string outputSvgPath)
     {
-        EnsureOutputDirectory(outputSvgPath);
+        FileOutput.EnsureParentDirectory(outputSvgPath);
         var svg = BuildTargetSeriesSvg(result.TargetSeries);
         File.WriteAllText(outputSvgPath, svg);
     }
 
     public static void WritePreModelSummaryCsv(DiagnosticsRunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("Split;AnchorCount;MeanTarget;StdTarget;MinTarget;P05Target;P50Target;P95Target;MaxTarget;TrendSlopePerStep");
 
@@ -320,7 +318,7 @@ public static class PartDiagnostics
 
     public static void WriteCadenceSummaryCsv(DiagnosticsRunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("Split;AnchorCount;IrregularIntervalCount;MissingStepCount;NonPositiveIntervalCount;MinIntervalMinutes;MeanIntervalMinutes;MaxIntervalMinutes");
 
@@ -340,7 +338,7 @@ public static class PartDiagnostics
 
     public static void WriteResidualSummaryCsv(DiagnosticsRunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("ModelName;Split;EvaluatedPoints;MeanError;MAE;RMSE;ResidualP05;ResidualP50;ResidualP95;UnderPredictionRate;OverPredictionRate");
 
@@ -365,7 +363,7 @@ public static class PartDiagnostics
 
     public static void WriteHorizonBucketCsv(DiagnosticsRunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("ModelName;Split;HorizonStart;HorizonEnd;EvaluatedPoints;MeanError;MAE;RMSE;UnderPredictionRate;OverPredictionRate");
 
@@ -390,7 +388,7 @@ public static class PartDiagnostics
 
     public static void WriteSampleCsv(DiagnosticsRunResult result, string outputCsvPath)
     {
-        EnsureOutputDirectory(outputCsvPath);
+        FileOutput.EnsureParentDirectory(outputCsvPath);
         using var writer = new StreamWriter(outputCsvPath, false);
         writer.WriteLine("ModelName;Split;AnchorUtcTime;ForecastUtcTime;HorizonStep;Predicted;Actual;Residual");
 
@@ -414,7 +412,7 @@ public static class PartDiagnostics
 
     public static void WriteHtmlReport(DiagnosticsRunResult result, string outputHtmlPath)
     {
-        EnsureOutputDirectory(outputHtmlPath);
+        FileOutput.EnsureParentDirectory(outputHtmlPath);
 
         var sb = new StringBuilder();
         sb.AppendLine("<!doctype html>");
@@ -534,7 +532,7 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsResidualSummary> BuildResidualSummaries(
-        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyList<ForecastPredictionPoint> predictions,
         IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var stats = new Dictionary<(string ModelName, string Split), RunningStats>(new ModelSplitComparer());
@@ -564,7 +562,7 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsHorizonBucketSummary> BuildHorizonBucketSummaries(
-        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyList<ForecastPredictionPoint> predictions,
         IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var stats = new Dictionary<(string ModelName, string Split, int BucketStart), RunningStats>(new ModelSplitBucketComparer());
@@ -611,7 +609,7 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsHorizonStepSummary> BuildValidationHorizonSummaries(
-        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyList<ForecastPredictionPoint> predictions,
         IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var stats = new Dictionary<(string ModelName, int HorizonStep), RunningStats>();
@@ -664,7 +662,7 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsSamplePoint> BuildSamplePoints(
-        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyList<ForecastPredictionPoint> predictions,
         IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var selectedAnchors = predictions
@@ -712,7 +710,7 @@ public static class PartDiagnostics
     }
 
     private static List<DiagnosticsOverlayPoint> BuildOverlayPoints(
-        IReadOnlyList<PredictionPoint> predictions,
+        IReadOnlyList<ForecastPredictionPoint> predictions,
         IReadOnlyDictionary<(string Split, DateTime AnchorUtcTime, int HorizonStep), double> actualLookup)
     {
         var overlays = new List<DiagnosticsOverlayPoint>();
@@ -831,130 +829,6 @@ public static class PartDiagnostics
         return numerator / denominator;
     }
 
-    private static List<PredictionPoint> ReadPredictionPoints(string predictionsCsvPath)
-    {
-        var points = new List<PredictionPoint>();
-        using var reader = new StreamReader(predictionsCsvPath);
-
-        var header = reader.ReadLine();
-        if (string.IsNullOrWhiteSpace(header))
-        {
-            return points;
-        }
-
-        var columns = header.Split(';');
-        var anchorIndex = FindRequiredIndex(columns, "anchorUtcTime");
-        var splitIndex = FindRequiredIndex(columns, "Split");
-        var modelIndex = FindRequiredIndex(columns, "Model");
-        var predictedIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
-            .Select(step => FindRequiredIndex(columns, $"Pred_tPlus{step}"))
-            .ToArray();
-
-        var seenKeys = new HashSet<(string ModelName, DateTime AnchorUtcTime, int HorizonStep)>();
-        string? line;
-        var lineNumber = 1;
-        while ((line = reader.ReadLine()) is not null)
-        {
-            lineNumber++;
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            var parts = line.Split(';');
-            if (parts.Length < columns.Length)
-            {
-                throw new FormatException($"Invalid prediction row at line {lineNumber}: expected {columns.Length} columns.");
-            }
-
-            if (!DateTime.TryParseExact(
-                    parts[anchorIndex],
-                    "yyyy-MM-dd HH:mm:ss",
-                    InvariantCulture,
-                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                    out var anchorUtcTime))
-            {
-                throw new FormatException($"Invalid anchorUtcTime at line {lineNumber}: '{parts[anchorIndex]}'.");
-            }
-
-            var split = parts[splitIndex];
-            var modelName = parts[modelIndex];
-
-            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
-            {
-                var predicted = ParseRequiredDouble(parts[predictedIndexes[step - 1]], lineNumber, $"Pred_tPlus{step}");
-                var key = (modelName, anchorUtcTime, step);
-                if (!seenKeys.Add(key))
-                {
-                    throw new InvalidOperationException(
-                        $"Duplicate prediction key for model '{modelName}', anchor '{anchorUtcTime:yyyy-MM-dd HH:mm:ss}', horizon '{step}'.");
-                }
-
-                points.Add(new PredictionPoint(modelName, anchorUtcTime, step, predicted, split));
-            }
-        }
-
-        return points;
-    }
-
-    private static List<PredictionPoint> BuildPredictionPoints(IReadOnlyList<Part3ForecastRow> forecastRows)
-    {
-        var points = new List<PredictionPoint>();
-        var seenKeys = new HashSet<(string ModelName, DateTime AnchorUtcTime, int HorizonStep)>();
-
-        foreach (var row in forecastRows)
-        {
-            if (row.PredictedTargets.Count < PipelineConstants.HorizonSteps)
-            {
-                throw new FormatException(
-                    $"Invalid in-memory forecast row for model '{row.ModelName}' at anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}': expected {PipelineConstants.HorizonSteps} predicted targets.");
-            }
-
-            for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
-            {
-                var predicted = row.PredictedTargets[step - 1];
-                var key = (row.ModelName, row.AnchorUtcTime, step);
-                if (!seenKeys.Add(key))
-                {
-                    throw new InvalidOperationException(
-                        $"Duplicate prediction key for model '{row.ModelName}', anchor '{row.AnchorUtcTime:yyyy-MM-dd HH:mm:ss}', horizon '{step}'.");
-                }
-
-                points.Add(new PredictionPoint(row.ModelName, row.AnchorUtcTime, step, predicted, row.Split));
-            }
-        }
-
-        return points;
-    }
-
-    private static int FindRequiredIndex(IReadOnlyList<string> columns, string name)
-    {
-        for (var index = 0; index < columns.Count; index++)
-        {
-            if (string.Equals(columns[index], name, StringComparison.Ordinal))
-            {
-                return index;
-            }
-        }
-
-        throw new FormatException($"Missing required column '{name}' in predictions CSV.");
-    }
-
-    private static double ParseRequiredDouble(string value, int lineNumber, string columnName)
-    {
-        if (!double.TryParse(value, NumberStyles.Float, InvariantCulture, out var parsed))
-        {
-            throw new FormatException($"Invalid {columnName} at line {lineNumber}: '{value}'.");
-        }
-
-        if (!double.IsFinite(parsed))
-        {
-            throw new FormatException($"Invalid {columnName} at line {lineNumber}: non-finite value '{value}'.");
-        }
-
-        return parsed;
-    }
-
     private static string NormalizeSplit(string split)
     {
         if (string.IsNullOrWhiteSpace(split))
@@ -963,15 +837,6 @@ public static class PartDiagnostics
         }
 
         return split.Trim();
-    }
-
-    private static void EnsureOutputDirectory(string path)
-    {
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
     }
 
     private static void AppendPreModelTable(StringBuilder sb, IReadOnlyList<DiagnosticsPreModelSummary> summaries)
@@ -1388,7 +1253,7 @@ public static class PartDiagnostics
 
     public static void WriteFeatureImportanceSvg(IReadOnlyList<Part3PfiFeatureResult> features, string outputSvgPath)
     {
-        EnsureOutputDirectory(outputSvgPath);
+        FileOutput.EnsureParentDirectory(outputSvgPath);
         File.WriteAllText(outputSvgPath, BuildFeatureImportanceSvg(features));
     }
 
