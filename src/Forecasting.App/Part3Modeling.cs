@@ -241,6 +241,7 @@ public static class Part3Modeling
 
     private interface IForecastingModel
     {
+        // Stable seam for adding/removing Part3 models without touching run orchestration.
         string ModelName { get; }
 
         void Train(IReadOnlyList<Part3InputRow> trainRows, IReadOnlyList<Part3InputRow> allRows);
@@ -250,6 +251,7 @@ public static class Part3Modeling
 
     private interface IPermutationImportanceModel
     {
+        // Optional capability seam: only models that support PFI implement this.
         Part3PfiResult? ComputePermutationImportance(IReadOnlyList<Part3InputRow> validationRows, int pfiHorizonStep);
     }
 
@@ -628,6 +630,7 @@ public static class Part3Modeling
 
     private static List<IForecastingModel> CreateModelRegistry(FastTreeOptions fastTreeOptions)
     {
+        // Single registration point for model lineup keeps RunModels flow closed to branching.
         return
         [
             new BaselineSeasonalForecastingModel(),
