@@ -139,7 +139,8 @@ public class Phase0CharacterizationTests
                 [
                     new Part4ModelMetrics("BaselineSeasonal", 1, 1, 0, 1.0, 1.0, 1.0)
                 ],
-                SamplePoints: []);
+                SamplePoints: [],
+                OverlayPoints: []);
 
             Part4Evaluation.WriteMetricsCsv(result, csvPath);
 

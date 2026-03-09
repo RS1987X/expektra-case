@@ -198,6 +198,73 @@ public class Part4EvaluationTests
         }
     }
 
+    [Fact]
+    public void WriteValidationPlotArtifactsByModel_WritesCsvAndSvgForBothModels()
+    {
+        var baseAnchor = new DateTime(2024, 2, 8, 0, 0, 0, DateTimeKind.Utc);
+        var anchors = Enumerable.Range(0, 8)
+            .Select(index => baseAnchor.AddMinutes(index * PipelineConstants.MinutesPerStep))
+            .ToArray();
+
+        var part2Rows = anchors
+            .Select(anchor => BuildPart2Row(anchor, "Validation", BuildActualTargets(100d)))
+            .ToArray();
+
+        var forecastRows = anchors
+            .Select(anchor => BuildPredictionRow(anchor, "Validation", "FastTreeRecursive", BuildPredictions(105d)))
+            .Concat(anchors.Select(anchor => BuildPredictionRow(anchor, "Validation", "BaselineSeasonal", BuildPredictions(98d))))
+            .ToArray();
+
+        var part2Path = CreatePart2Csv(part2Rows);
+        var predictionsPath = CreatePredictionsCsv(forecastRows);
+
+        var outputDir = Path.Combine(Path.GetTempPath(), $"part4-plot-tests-{Guid.NewGuid():N}");
+
+        try
+        {
+            var result = Part4Evaluation.RunEvaluation(part2Path, predictionsPath);
+            var written = Part4Evaluation.WriteValidationPlotArtifactsByModel(result, outputDir);
+
+            Assert.Equal(2, written.Count);
+
+            var fastTreePaths = Assert.Single(written.Where(path => path.ModelName == "FastTreeRecursive"));
+            var baselinePaths = Assert.Single(written.Where(path => path.ModelName == "BaselineSeasonal"));
+
+            Assert.True(File.Exists(fastTreePaths.CsvPath));
+            Assert.True(File.Exists(fastTreePaths.SvgPath));
+            Assert.True(File.Exists(baselinePaths.CsvPath));
+            Assert.True(File.Exists(baselinePaths.SvgPath));
+
+            // Each CSV should have 1 header + 8 data rows (one per anchor at fixed horizon step 92).
+            var fastTreeCsvLines = File.ReadAllLines(fastTreePaths.CsvPath);
+            Assert.Equal(9, fastTreeCsvLines.Length);
+            Assert.Contains("HorizonStep", fastTreeCsvLines[0]);
+            Assert.All(fastTreeCsvLines.Skip(1), line => Assert.Contains(";92;", line));
+
+            var baselineCsvLines = File.ReadAllLines(baselinePaths.CsvPath);
+            Assert.Equal(9, baselineCsvLines.Length);
+            Assert.Contains("HorizonStep", baselineCsvLines[0]);
+            Assert.All(baselineCsvLines.Skip(1), line => Assert.Contains(";92;", line));
+
+            var fastTreeSvgText = File.ReadAllText(fastTreePaths.SvgPath);
+            Assert.Contains("FastTreeRecursive Predicted vs Actual at fixed horizon t+92", fastTreeSvgText);
+            Assert.Contains("48h window", fastTreeSvgText);
+
+            var baselineSvgText = File.ReadAllText(baselinePaths.SvgPath);
+            Assert.Contains("BaselineSeasonal Predicted vs Actual at fixed horizon t+92", baselineSvgText);
+            Assert.Contains("48h window", baselineSvgText);
+        }
+        finally
+        {
+            File.Delete(part2Path);
+            File.Delete(predictionsPath);
+            if (Directory.Exists(outputDir))
+            {
+                Directory.Delete(outputDir, true);
+            }
+        }
+    }
+
     private static string CreatePart2Csv(IReadOnlyList<string> rows)
     {
         var path = Path.Combine(Path.GetTempPath(), $"part4-part2-{Guid.NewGuid():N}.csv");

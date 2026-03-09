@@ -99,7 +99,15 @@ public static class PipelineRunner
         var part4Result = Part4Evaluation.RunEvaluation(part3Rows, part3Result.Forecasts);
         Part4Evaluation.WriteMetricsCsv(part4Result, part4MetricsOutputPath);
         Part4Evaluation.WriteSampleCsv(part4Result, part4SampleOutputPath);
+        var part4PlotPaths = Part4Evaluation.WriteValidationPlotArtifactsByModel(
+            part4Result,
+            Path.GetDirectoryName(part4MetricsOutputPath) ?? "artifacts");
         AddOutputLine(lines, $"Part 4 complete: metrics -> {part4MetricsOutputPath}", output);
+        foreach (var plot in part4PlotPaths)
+        {
+            AddOutputLine(lines, $"Part 4 complete: {plot.ModelName} validation rollout CSV (48h, 15-min cadence) -> {plot.CsvPath}", output);
+            AddOutputLine(lines, $"Part 4 complete: {plot.ModelName} validation rollout SVG (48h, 15-min cadence) -> {plot.SvgPath}", output);
+        }
 
         var diagnosticsResult = PartDiagnostics.RunDiagnostics(part3Rows, part3Result.Forecasts, part3Result.FeatureImportance?.Features);
         PartDiagnostics.WriteArtifacts(diagnosticsResult, diagnosticsOutputDirectory);
@@ -254,6 +262,9 @@ public static class PipelineRunner
         var part4Result = Part4Evaluation.RunEvaluation(part4InputPath, part4PredictionsPath);
         Part4Evaluation.WriteMetricsCsv(part4Result, part4MetricsOutputPath);
         Part4Evaluation.WriteSampleCsv(part4Result, part4SampleOutputPath);
+        var part4PlotPaths = Part4Evaluation.WriteValidationPlotArtifactsByModel(
+            part4Result,
+            Path.GetDirectoryName(part4MetricsOutputPath) ?? "artifacts");
 
         var lines = new List<string>();
         AddOutputLine(lines, "Part 4 model comparison:", output);
@@ -266,6 +277,11 @@ public static class PipelineRunner
 
         AddOutputLine(lines, $"Saved Part 4 metrics to: {part4MetricsOutputPath}", output);
         AddOutputLine(lines, $"Saved Part 4 sample to: {part4SampleOutputPath}", output);
+        foreach (var plot in part4PlotPaths)
+        {
+            AddOutputLine(lines, $"Saved Part 4 {plot.ModelName} validation rollout CSV (48h, 15-min cadence) to: {plot.CsvPath}", output);
+            AddOutputLine(lines, $"Saved Part 4 {plot.ModelName} validation rollout SVG (48h, 15-min cadence) to: {plot.SvgPath}", output);
+        }
         return Success(lines);
     }
 

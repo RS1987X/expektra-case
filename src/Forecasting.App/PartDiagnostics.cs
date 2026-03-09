@@ -99,9 +99,12 @@ public static class PartDiagnostics
 {
     private const int HorizonBucketSize = 24;
     private const int SampleAnchors = 2;
-    private static readonly int[] OverlayHorizonSteps = [96, 192];
+    private static readonly int[] OverlayHorizonSteps = [92, 96, 192];
     private const int OverlayMaxRenderPoints = 1500;
     private const string OverlayModelName = "FastTreeRecursive";
+    private const string OverlayFocusSplit = "Validation";
+    private const int OverlayFocusHorizonStep = 92;
+    private const int OverlayWindowHours = 48;
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
 
     private sealed record ActualPoint(DateTime AnchorUtcTime, int HorizonStep, double Actual);
@@ -248,14 +251,51 @@ public static class PartDiagnostics
 
         foreach (var group in bySplitAndHorizon)
         {
+            var points = group.OrderBy(point => point.ForecastUtcTime).ToList();
             var safeSplit = SanitizeFileNameSegment(group.Key.Split);
             var suffix = $"tplus{group.Key.HorizonStep}";
             var outputPath = Path.Combine(outputDirectory, $"target_vs_predicted_{safeSplit}_{suffix}.svg");
-            File.WriteAllText(outputPath, BuildSplitOverlaySvg(group.ToList()));
+            File.WriteAllText(outputPath, BuildSplitOverlaySvg(points));
 
             var csvPath = Path.Combine(outputDirectory, $"target_vs_predicted_{safeSplit}_{suffix}.csv");
-            WriteSplitOverlayCsv(group.ToList(), csvPath);
+            WriteSplitOverlayCsv(points, csvPath);
+
+            if (string.Equals(group.Key.Split, OverlayFocusSplit, StringComparison.OrdinalIgnoreCase)
+                && group.Key.HorizonStep == OverlayFocusHorizonStep)
+            {
+                WriteOverlayWindowArtifacts(points, outputDirectory, safeSplit, suffix);
+            }
         }
+    }
+
+    private static void WriteOverlayWindowArtifacts(
+        IReadOnlyList<DiagnosticsOverlayPoint> points,
+        string outputDirectory,
+        string safeSplit,
+        string suffix)
+    {
+        if (points.Count == 0)
+        {
+            return;
+        }
+
+        var windowEnd = points[^1].ForecastUtcTime;
+        var windowStart = windowEnd.AddHours(-OverlayWindowHours);
+        var windowedPoints = points
+            .Where(point => point.ForecastUtcTime >= windowStart && point.ForecastUtcTime <= windowEnd)
+            .ToList();
+
+        if (windowedPoints.Count == 0)
+        {
+            return;
+        }
+
+        var outputSuffix = $"{suffix}_{OverlayWindowHours}h";
+        var svgPath = Path.Combine(outputDirectory, $"target_vs_predicted_{safeSplit}_{outputSuffix}.svg");
+        File.WriteAllText(svgPath, BuildSplitOverlaySvg(windowedPoints));
+
+        var csvPath = Path.Combine(outputDirectory, $"target_vs_predicted_{safeSplit}_{outputSuffix}.csv");
+        WriteSplitOverlayCsv(windowedPoints, csvPath);
     }
 
     private static void WriteSplitOverlayCsv(IReadOnlyList<DiagnosticsOverlayPoint> points, string outputCsvPath)

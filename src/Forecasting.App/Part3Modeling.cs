@@ -366,9 +366,13 @@ public static partial class Part3Modeling
         }
 
         var modelRegistry = CreateModelRegistry(fastTreeOptions ?? new FastTreeOptions());
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         foreach (var model in modelRegistry)
         {
+            var trainSw = System.Diagnostics.Stopwatch.StartNew();
             model.Train(trainRows, sorted);
+            trainSw.Stop();
+            Console.Error.WriteLine($"[TIMING] {model.ModelName} Train: {trainSw.Elapsed.TotalSeconds:F2}s");
         }
 
         // Compute PFI on validation data only when explicitly requested (it is expensive).
@@ -379,12 +383,15 @@ public static partial class Part3Modeling
 
         var forecasts = new List<Part3ForecastRow>(forecastAnchors.Count * modelRegistry.Count);
         var recursiveStepsByModel = modelRegistry.ToDictionary(model => model.ModelName, _ => 0, StringComparer.Ordinal);
+        var inferenceTimers = modelRegistry.ToDictionary(model => model.ModelName, _ => new System.Diagnostics.Stopwatch(), StringComparer.Ordinal);
 
         foreach (var anchor in forecastAnchors)
         {
             foreach (var model in modelRegistry)
             {
+                inferenceTimers[model.ModelName].Start();
                 var prediction = model.Predict(anchor);
+                inferenceTimers[model.ModelName].Stop();
                 recursiveStepsByModel[model.ModelName] += prediction.RecursiveStepsBeyondAnchor;
 
                 forecasts.Add(new Part3ForecastRow(
@@ -396,6 +403,13 @@ public static partial class Part3Modeling
                     anchor.HorizonTargets));
             }
         }
+
+        foreach (var model in modelRegistry)
+        {
+            Console.Error.WriteLine($"[TIMING] {model.ModelName} Inference: {inferenceTimers[model.ModelName].Elapsed.TotalSeconds:F2}s ({forecastAnchors.Count} anchors)");
+        }
+        sw.Stop();
+        Console.Error.WriteLine($"[TIMING] Part3 total (train+infer): {sw.Elapsed.TotalSeconds:F2}s");
 
         var modelSummaries = modelRegistry
             .Select(model => new Part3ModelSummary(

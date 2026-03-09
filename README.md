@@ -55,13 +55,12 @@ Vid `all`- och `part3`-körningar skrivs även `run_manifest.json` med effektiva
 ## Del 5 - Reflektion och dokumentation
 
 ### 1. Vilka modelleringsval gjorde du och varfor?
-Jag valde två modeller for tydlig jämforelse:
-- `BaselineSeasonal`: predikterar per veckodag/timme/minut utifrån historiskt medel för motstvarande tidpunkt. Den ar enkel, robust och fungerar som minimikrav-baseline.
-- `FastTreeRecursive` (ML.NET): en enstegsmodell som rullas fram rekursivt over 192 steg (48h i 15-minutersupplosning).
+Jag valde att fokusera på Naiv Sässongmodell och rekursiv FastTree för att kunna implementera robust.
+Modelleringsvalen jag gjorde i form av features var i princip de specificerades i uppgiften. 
 
-Skälet till dessa val var att få en tydlig trade-off mellan enkel tolkbar referensmodell och en starkare ML-modell. På valideringsdatan blev FastTree klart bättre i denna implementation (se `artifacts/part4_metrics.csv`):
-- BaselineSeasonal: MAE 9273.88, RMSE 11361.91, MAPE 17.95
-- FastTreeRecursive: MAE 2270.13, RMSE 3215.10, MAPE 4.56
+I rekursiva ML-modellen propagerar vi bara fram predikterade värden av target, features som härleds från target och kalender-features som är kända vid prediktionstiden. Exogena variabler är frusna vid prediktionstidpunkt.  
+
+Träning och validerings split görs innan preprocessing för att kunna rensa validerings set från forwardfill mellan träning och validerings set, . På samma sätt förhindras läckage mellan träning och validering genom att ta bord validerings punkter som ligger inom prediktionshorisonten t+192 från gränsen mellan träning och valideringsset. 
 
 ### 2. Vilka features visade sig viktigast (eller bedöms vara viktigast) och hur motiverar du det?
 Jag har inte kört explicit feature-importance-export i denna version, men utifrån problemtyp och resultat bedömer jag följande som viktigast:
@@ -72,25 +71,22 @@ Jag har inte kört explicit feature-importance-export i denna version, men utifr
 
 ### 3. Vad skulle du göra annorlunda eller lägga till med mer tid?
 - Köra tidsserie-CV med flera rullande foldar. Kan behöva rensa ut valideringspunker i slutet av varje fold baserat på pga rullande features då.
-- Införa 3-way split (Train/Validation/Holdout): använda Validation för hyperparameter-tuning och feature selection, och en separat Holdout för slutlig och utvärdering.
+- Införa 3-way split (Train/Validation/Holdout): använda Validering för hyperparameter-tuning och feature selection, och en separat Holdout för slutlig utvärdering.
 - Träna om en reducerad modell efter feature importance/feature selection och jämföra den mot full modell samt baseline på Holdout.
-- Modellera och prediktera exogena variabler för att kunna rulla fram dessa i rekursiva loopen också 
+- Modellera och prediktera exogena variabler för att kunna rulla fram dessa i rekursiva loopen. 
 - Lägga till probabilistiska prognoser (prediktionsintervall), inte bara punktprognos.
+- Implementera fler modeller
 - Performance profiling
 
 ### 4. Hur skulle du hantera konceptdrift?
-Kombinera oöervaking, snabb detektion och kontrollerad omträning:
+Kombinera örvaking, snabb detektion och kontrollerad omträning:
 - Övervaka live-MAE/RMSE/MAPE per tidsfack (timme, veckodag, säsong) och residualers bias.
 - Sätta trösklar för driftlarm
 - Omträna på rullande fönster enligt schema eller eventdrivet vid driftlarm.
 - Kör champion/challenger-upplagg: ny modell skuggkors innan promotion.
 - Versionshantera data, features och modeller for reproducerbar rollback.
 
-### 5. Hur skalbar ar lösningen for applicering pa stort antal tidsserier?
-Nuvarande losning ar god for enskild/fåtal tidsserier, men skalar till många serier med några tillägg:
-- Partionera per serie-id i dataflödet och kör feature-byggning/träning parallellt.
-- Batcha inferens och skriv artifacts streamat (för att undvika hög minneslast).
-- Använd en hybridstrategi: global modell for "long-tail" serier och serie-specifika modeller for stora/affärskritiska serier.
-- Automatisera omträning och modellval per serie med gemensam evalueringsstandard.
+### 5. Hur skalbar är lösningen for applicering pa stort antal tidsserier?
+Pipelinen är modulär (Part 1–4) men körs helt sekventiellt med alla datastrukturer i minne. Flaskhalsen är Part 3-inferens: rekursiv 192-stegs rollout per anchor-punkt som tar ~50% av körtiden. Varje anchor-punkts (t) prediktioner är oberoende av andra anchors prediktioner, vilket ger naturlig parallelliserbarhet via Parallel.ForEach — dock inte stegen inom en rollout, som är sekventiella pga rekursionen. Modellträning (Baseline + FastTree) såklart också parallelliseras.
 
-Sammanfattning: arkitekturen ar modulart uppdelad (Part1-Part4) och passar bra som grund for produktion, men for storskalighet behovs tydligare orkestrering, modellstyrning och drift-övervakning.
+För applicering på stort antal tidsserier krävs dessutom partitionering per serie-id, då pipelinen idag antar en enda tidsserie.

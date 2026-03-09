@@ -157,7 +157,7 @@ public class PartDiagnosticsTests
             Assert.Contains("Target over time (TargetAtT)", html);
             Assert.Contains("Validation error by prediction horizon (t+1..t+192)", html);
             Assert.Contains("FastTreeRecursive", html);
-            Assert.Contains("Target vs FastTreeRecursive over time by split (t+96, t+192)", html);
+            Assert.Contains("Target vs FastTreeRecursive over time by split (t+92, t+96, t+192)", html);
             Assert.Contains("Time (UTC)", html);
             Assert.Contains("Target value", html);
             Assert.Contains("Predicted vs actual sampled anchors", html);
