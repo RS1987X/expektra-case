@@ -647,6 +647,38 @@ public class Part3ModelingTests
     }
 
     [Fact]
+    public void ResolvePfiFeatureName_PrefersPfiStringKeyOverFallbackIndex()
+    {
+        var resolved = Part3Modeling.ResolvePfiFeatureName("TargetLag192Std96", fallbackIndex: 0);
+
+        Assert.Equal("TargetLag192Std96", resolved);
+    }
+
+    [Fact]
+    public void ResolvePfiFeatureName_UsesNumericKeyAsFeatureIndex()
+    {
+        var resolved = Part3Modeling.ResolvePfiFeatureName(2, fallbackIndex: 0);
+
+        Assert.Equal(Part3Modeling.FeatureNames[2], resolved);
+    }
+
+    [Fact]
+    public void ResolvePfiFeatureName_UsesUIntKeyAsFeatureIndex()
+    {
+        var resolved = Part3Modeling.ResolvePfiFeatureName((uint)3, fallbackIndex: 0);
+
+        Assert.Equal(Part3Modeling.FeatureNames[3], resolved);
+    }
+
+    [Fact]
+    public void ResolvePfiFeatureName_UsesLongKeyAsFeatureIndex()
+    {
+        var resolved = Part3Modeling.ResolvePfiFeatureName((long)4, fallbackIndex: 0);
+
+        Assert.Equal(Part3Modeling.FeatureNames[4], resolved);
+    }
+
+    [Fact]
     public void Pfi_WriteFeatureImportanceCsv_WritesExpectedFormat()
     {
         var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 4);

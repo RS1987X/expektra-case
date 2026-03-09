@@ -11,7 +11,7 @@ Denna repo implementerar en komplett, körbar pipeline i .NET 10 for Del 1-4:
 
 Krav: .NET 10 SDK
 
-Kör hela pipelinen (Del 1-4 + diagnostics):
+Kör hela pipelinen (Del 1-4):
 
 ```bash
 dotnet run --project src/Forecasting.App/Forecasting.App.csproj
@@ -63,14 +63,12 @@ och `part4_baselineseasonal_validation_tplus92_48h.csv` med tillhörande .svg-pl
 Jag valde att implementera naiv säsongmodell och rekursiv FastTree för göra en robust implementation.
 Modelleringsvalen jag gjorde i form av features var de som specificerades i uppgiften. 
 
-Permutation Feature Importance (PFI) används för att se vilka variabler som påverkar mest och modellinstabilitet genom multi-seed PFI (PFI körs flera gånger). Valde PFI framför impurity-mått då det svarar på frågan vilka features som pårverkar mest istället som för impurity-mått som svarar på frågan vilka features som påverkar trädkonstruktionen mest.  
+Permutation Feature Importance (PFI) används för att se vilka variabler som påverkar mest och modellinstabilitet genom multi-seed PFI (PFI körs flera gånger). Valde PFI framför impurity-mått då det svarar på frågan vilka features som pårverkar prognostisering mest istället för impurity-mått som svarar på frågan vilka features som påverkar trädkonstruktionen mest.  
 
 Träning och validerings split görs innan preprocessing för att kunna rensa validerings set från forwardfill mellan träning och validerings set, viktig princip för att hantera mer komplicerad preprocess-metodik. På samma sätt förhindras läckage mellan träning och validering genom att ta bort validerings punkter som ligger inom prediktionshorisonten t+192 från gränsen mellan träning och validerings set, då träning på targets som också finns i validerings setet innebär läckage av information.
 
 ### 2. Vilka features visade sig viktigast (eller bedöms vara viktigast) och hur motiverar du det?
 Enligt Perfmutation Feature Importance baserat på validerings setet med en prediktions horizont på 24h (96 steg) med permutation count satt till 10 är de viktigaste variablerna `HourOfDay`, `Target192LagMean96`, `TargetLag192Std96`,`Temperature`. Lägre men ändå till synes signifikant effekt () är `DayOfWeek`,`Windspeed`, och `MinuteOfHour` () Temp fångar ju långsiktig
-
-Vid körning av multi-seed pfi visar dock på viss modellinstabilitet, sannolikt pga korrelerade features.
 
 Utifrån problemtyp och resultat bedömer jag följande som viktigast:
 - `TargetLag192` och `TargetLag672`: fångar stark dygns- och veckosäsong i energiförbrukning.
@@ -93,8 +91,8 @@ Kombinera örvaking, snabb detektion och kontrollerad omträning:
 - Övervaka live-MAE/RMSE/MAPE per tidsfack (timme, veckodag, säsong) och residualers bias.
 - Sätta trösklar för driftlarm
 - Omträna på rullande fönster enligt schema eller eventdrivet vid driftlarm.
-- Kör champion/challenger-upplagg: ny modell skuggkors innan promotion.
+- Ny modell skuggkörs innan promotion.
 - Versionshantera data, features och modeller for reproducerbar rollback.
 
 ### 5. Hur skalbar är lösningen for applicering pa stort antal tidsserier?
-Pipelinen är modulär (Part 1–4) men körs helt sekventiellt med alla datastrukturer i minne. Flaskhalsen är Part 3-inferens: rekursiv 192-stegs rollout per anchor-punkt som tar ~50% av körtiden. Varje anchor-punkts (t) prediktioner är oberoende av andra anchors prediktioner, vilket ger naturlig parallelliserbarhet via Parallel.ForEach — dock inte stegen inom en rollout, som är sekventiella pga rekursionen. Modellträning (Baseline + FastTree + ...) kan såklart också parallelliseras. Inferensskalar med = antal_träd × träddjup × n_anchors × prediktionshorisont
+Pipelinen är modulär (Part 1–4) men körs helt sekventiellt med alla datastrukturer i minne. Flaskhalsen är Part 3-inferens: rekursiv 192-stegs rollout per anchor-punkt som tar ~50% av körtiden. Varje anchor-punkts (t) prediktioner är oberoende av andra anchors prediktioner, vilket ger naturlig parallelliserbarhet via Parallel.ForEach — dock inte stegen inom en rollout, som är sekventiella pga rekursionen. Modellträning (Baseline + FastTree + ...) kan såklart också parallelliseras.

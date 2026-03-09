@@ -478,7 +478,7 @@ public static partial class Part3Modeling
             .Select((kvp, index) => new
             {
                 Index = index,
-                Name = index < FeatureNames.Length ? FeatureNames[index] : $"Feature_{index}",
+                Name = ResolvePfiFeatureName(kvp.Key, index),
                 MaeDelta = kvp.Value.MeanAbsoluteError.Mean,
                 MaeDeltaStdDev = kvp.Value.MeanAbsoluteError.StandardDeviation,
                 RmseDelta = kvp.Value.RootMeanSquaredError.Mean,
@@ -499,6 +499,67 @@ public static partial class Part3Modeling
             .ToList();
 
         return new Part3PfiResult(features, permutationCount, validationRows.Count, pfiHorizonStep);
+    }
+
+    internal static string ResolvePfiFeatureName(object? featureKey, int fallbackIndex)
+    {
+        if (featureKey is string keyAsString && !string.IsNullOrWhiteSpace(keyAsString))
+        {
+            return keyAsString;
+        }
+
+        if (featureKey is ReadOnlyMemory<char> keyAsMemory && !keyAsMemory.IsEmpty)
+        {
+            return keyAsMemory.ToString();
+        }
+
+        if (TryResolveFeatureIndex(featureKey, out var keyAsIndex))
+        {
+            return FeatureNames[keyAsIndex];
+        }
+
+        if (fallbackIndex >= 0 && fallbackIndex < FeatureNames.Length)
+        {
+            return FeatureNames[fallbackIndex];
+        }
+
+        return $"Feature_{fallbackIndex}";
+    }
+
+    private static bool TryResolveFeatureIndex(object? featureKey, out int index)
+    {
+        // ML.NET can surface vector slot keys as various integral runtime types.
+        // Accept any integral key to keep slot-name mapping deterministic across processes.
+        switch (featureKey)
+        {
+            case int i when i >= 0 && i < FeatureNames.Length:
+                index = i;
+                return true;
+            case long l when l >= 0 && l < FeatureNames.Length:
+                index = (int)l;
+                return true;
+            case uint ui when ui < FeatureNames.Length:
+                index = (int)ui;
+                return true;
+            case ulong ul when ul < (ulong)FeatureNames.Length:
+                index = (int)ul;
+                return true;
+            case short s when s >= 0 && s < FeatureNames.Length:
+                index = s;
+                return true;
+            case ushort us when us < FeatureNames.Length:
+                index = us;
+                return true;
+            case byte b when b < FeatureNames.Length:
+                index = b;
+                return true;
+            case sbyte sb when sb >= 0 && sb < FeatureNames.Length:
+                index = sb;
+                return true;
+            default:
+                index = -1;
+                return false;
+        }
     }
 
     private static Part3PfiResult? ComputeMultiSeedPermutationImportance(

@@ -9,7 +9,7 @@ This repo implements a small forecasting pipeline with these modes:
 - `part3`: train models and generate forecasts
 - `part4`: evaluate validation forecasts
 - `diagnostics`: generate inspection artifacts and HTML diagnostics
-- `all`: run the full pipeline end to end
+- `all`: run the full pipeline end to end for Part 1 through Part 4
 
 The code lives in `src/Forecasting.App` and is verified by tests in `tests/Forecasting.App.Tests`.
 
@@ -20,7 +20,7 @@ The code lives in `src/Forecasting.App` and is verified by tests in `tests/Forec
 3. Part 2 converts the time series into supervised rows: one anchor at time `t` with labels `t+1..t+192`.
 4. Part 3 trains forecasting models and produces 192-step forecasts.
 5. Part 4 evaluates validation forecasts with `MAE`, `RMSE`, and `MAPE`.
-6. Diagnostics writes extra summaries, plots, and HTML output for inspection.
+6. Diagnostics is an explicit, separate mode that writes extra summaries, plots, and HTML output for inspection.
 
 ## Main Modules
 
