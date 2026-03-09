@@ -104,6 +104,8 @@ public static class Part2FeatureEngineering
             return new Part2Dataset([], new Part2DatasetSummary(DateTime.MinValue, PipelineConstants.HorizonSteps, 0, 0, 0, 0, 0, 0, 0, 0));
         }
 
+        EnsureRegularCadence(sorted);
+
         var effectiveValidationStart = validationStartUtc ?? sorted[^1].UtcTime.AddDays(-PipelineConstants.DefaultValidationWindowDays);
 
         const int rollingMinLag192 = FeatureConfig.TargetLag192;
@@ -233,6 +235,33 @@ public static class Part2FeatureEngineering
             result.Count);
 
         return new Part2Dataset(result, summary);
+    }
+
+    private static void EnsureRegularCadence(IReadOnlyList<FeatureRow> rows)
+    {
+        if (rows.Count < 2)
+        {
+            return;
+        }
+
+        var expectedCadence = TimeSpan.FromMinutes(PipelineConstants.MinutesPerStep);
+
+        for (var index = 1; index < rows.Count; index++)
+        {
+            var previousUtc = rows[index - 1].UtcTime;
+            var currentUtc = rows[index].UtcTime;
+            var observedCadence = currentUtc - previousUtc;
+
+            if (observedCadence == expectedCadence)
+            {
+                continue;
+            }
+
+            throw new InvalidOperationException(
+                $"Part 2 requires regular {PipelineConstants.MinutesPerStep}-minute cadence. " +
+                $"Found interval of {observedCadence.TotalMinutes:0.##} minutes between " +
+                $"{previousUtc:yyyy-MM-dd HH:mm:ss} UTC and {currentUtc:yyyy-MM-dd HH:mm:ss} UTC.");
+        }
     }
 
     public static void WriteDatasetCsv(IReadOnlyList<Part2SupervisedRow> rows, string outputCsvPath)

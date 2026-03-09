@@ -31,5 +31,5 @@ public sealed record FastTreeOptions(
     double LearningRate = 0.05,
     bool EnableEarlyStopping = false,
     int PfiPermutationCount = 10,
-    int PfiModelSeeds = 5,
+    int PfiModelSeeds = 1,
     int Seed = 42);

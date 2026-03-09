@@ -78,6 +78,11 @@ This document lists the robustness controls currently implemented in the data in
 
 ## 6) Leakage controls in supervised dataset creation (Part 2)
 
+- Fail-fast regular-cadence guard before lag/horizon mapping.
+  - Part 2 now validates consecutive timestamps are exactly `PipelineConstants.MinutesPerStep` apart.
+  - Any gap/irregular interval throws `InvalidOperationException` with offending timestamp pair and observed interval.
+  - Rationale: Part 2 contracts (`Lag192`, `t+1..t+192`) are step-based and require fixed cadence to remain time-correct.
+
 - Lookback gate before feature/horizon construction.
   - Dataset generation only proceeds when enough history exists for lags and rolling windows.
 

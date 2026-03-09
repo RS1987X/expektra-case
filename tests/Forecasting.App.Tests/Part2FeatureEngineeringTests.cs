@@ -165,6 +165,19 @@ public class Part2FeatureEngineeringTests
     }
 
     [Fact]
+    public void BuildDataset_ThrowsWhenCadenceHasMissingTimestampGap()
+    {
+        var rows = BuildSyntheticFeatureRows(1000);
+        rows.RemoveAt(500); // Creates a 30-minute gap between adjacent rows.
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            Part2FeatureEngineering.BuildDataset(rows, rows[767].UtcTime));
+
+        Assert.Contains("requires regular 15-minute cadence", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("30", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReadFeatureMatrixCsv_ParsesValidRow()
     {
         var path = CreateTempCsv(
