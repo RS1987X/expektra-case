@@ -72,7 +72,7 @@ Enligt PFI baserat på validerings-setet med en prediktions horizont på 24h (96
 
 `TargetLag192` är senaste tillgängliga informationen på target i feature-setet så det är den mest uppdaterade bilden av nivån av förbrukningen. Fångar också variationen i förbrukning från dag till dag givet samma tid, låg förbrukning iförrgår kl 5 på morgonen innebär förmodligen också lågförbrukning idag.
 `TargetLag672` tar hand om säsongseffekt på veckobasis som kan orsakas av helg vs veckodag. 
-`HourCos` hjälper modellen att representera tid på dygnet vilket är relevant eftersom förbrukning går upp på dagen och ner på natten. Tillskillnad från `TargetLag192` påverkas inte `HourCos` av idiosynkratiska händelser. Vid t-192 kan target varit ovanligt hög pga oförutsedda händelser, det kan forfarande betyda att det är natt/morgon.     
+`HourCos` hjälper modellen att representera tid på dygnet. Featuren har sitt högsta värde kl 00 och sitt lägsta värde kl 12. Det bör vara ett ganska starkt negativt samband med förbrukning som är högst kl 12 och lägst kl 00. Tillskillnad från `TargetLag192` påverkas inte `HourCos` av idiosynkratiska händelser. Vid t-192 kan target varit ovanligt hög pga oförutsedda händelser, det kan forfarande betyda att det är natt/morgon.    
 `Temperature` kan förklara kortsiktig idiosynkratisk variation i förbrukning till följd av exogena chocker/förändringar i väder. Den fungerar också som proxy för årstid. Årstidseffekten är tydlig i target-serien när den plottas över tid. 
 
 ### 3. Vad skulle du göra annorlunda eller lägga till med mer tid?
