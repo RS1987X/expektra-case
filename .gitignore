@@ -1,5 +1,4 @@
-data/*
-!data/holidays.public.csv
+data/
 docs/**/*.pdf
 artifacts/
 **/bin/
