@@ -37,8 +37,15 @@ public sealed record Part3PfiFeatureResult(
     double R2Delta,
     double R2DeltaStdDev);
 
+public sealed record Part3PfiSeedDetail(
+    int Seed,
+    string FeatureName,
+    int Rank,
+    double MaeDelta);
+
 public sealed record Part3PfiResult(
     IReadOnlyList<Part3PfiFeatureResult> Features,
     int PermutationCount,
     int EvaluationRowCount,
-    int HorizonStep);
+    int HorizonStep,
+    IReadOnlyList<Part3PfiSeedDetail>? PerSeedDetails = null);

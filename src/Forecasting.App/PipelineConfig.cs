@@ -29,4 +29,7 @@ public sealed record FastTreeOptions(
     int NumberOfLeaves = 18,
     int MinimumExampleCountPerLeaf = 50,
     double LearningRate = 0.05,
+    bool EnableEarlyStopping = false,
+    int PfiPermutationCount = 10,
+    int PfiModelSeeds = 5,
     int Seed = 42);

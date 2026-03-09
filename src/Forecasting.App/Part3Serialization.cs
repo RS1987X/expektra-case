@@ -243,4 +243,31 @@ public static partial class Part3Modeling
                 feature.R2DeltaStdDev.ToString(InvariantCulture)));
         }
     }
+
+    public static void WriteFeatureImportancePerSeedCsv(Part3PfiResult pfiResult, string outputCsvPath)
+    {
+        if (pfiResult.PerSeedDetails is null || pfiResult.PerSeedDetails.Count == 0)
+            return;
+
+        FileOutput.EnsureParentDirectory(outputCsvPath);
+
+        // Pivot: rows = features, columns = per-seed rank + average.
+        var seeds = pfiResult.PerSeedDetails.Select(d => d.Seed).Distinct().OrderBy(s => s).ToList();
+        var featureNames = pfiResult.Features.Select(f => f.FeatureName).ToList();
+        var lookup = pfiResult.PerSeedDetails.ToDictionary(d => (d.Seed, d.FeatureName), d => d.Rank);
+
+        using var writer = new StreamWriter(outputCsvPath, false);
+        // Header: FeatureName;Seed42_Rank;Seed43_Rank;...;AvgRank
+        var header = "FeatureName;" + string.Join(';', seeds.Select(s => $"Seed{s}_Rank")) + ";AvgRank";
+        writer.WriteLine(header);
+
+        foreach (var feature in featureNames)
+        {
+            var ranks = seeds.Select(s => lookup.TryGetValue((s, feature), out var r) ? r : 0).ToList();
+            var avgRank = ranks.Average();
+            var row = feature + ";" + string.Join(';', ranks.Select(r => r.ToString(InvariantCulture)))
+                + ";" + avgRank.ToString("F1", InvariantCulture);
+            writer.WriteLine(row);
+        }
+    }
 }

@@ -1,124 +1,161 @@
 # Architecture Overview
 
-## Scope
+## System at a Glance
 
-This document describes the current implementation architecture for:
+This repo implements a small forecasting pipeline with these modes:
 
-- Part 1 preprocessing and leakage-safe evaluation preparation
-- Part 2 feature engineering and multi-step supervised dataset generation
-- Part 3 forecasting (baseline + ML.NET FastTree recursive inference)
+- `part1`: preprocess raw data
+- `part2`: build supervised forecasting rows
+- `part3`: train models and generate forecasts
+- `part4`: evaluate validation forecasts
+- `diagnostics`: generate inspection artifacts and HTML diagnostics
+- `all`: run the full pipeline end to end
 
-The solution is implemented in .NET 10 under `src/Forecasting.App` and verified with tests in `tests/Forecasting.App.Tests`.
+The code lives in `src/Forecasting.App` and is verified by tests in `tests/Forecasting.App.Tests`.
 
-## Module Structure
+## Main Flow
+
+1. Part 1 reads raw time-series data and holiday data.
+2. Part 1 cleans the data, imputes missing values, and adds calendar/cyclical features.
+3. Part 2 converts the time series into supervised rows: one anchor at time `t` with labels `t+1..t+192`.
+4. Part 3 trains forecasting models and produces 192-step forecasts.
+5. Part 4 evaluates validation forecasts with `MAE`, `RMSE`, and `MAPE`.
+6. Diagnostics writes extra summaries, plots, and HTML output for inspection.
+
+## Main Modules
 
 - `Program.cs`
-	- CLI entrypoint.
-	- Routes execution to:
-		- Part 1 default flow (raw CSV + holidays -> preprocessed feature matrix + audit artifacts)
-		- Part 2 flow (`part2` mode) (Part 1 matrix -> supervised matrix + summary)
+  - CLI entrypoint.
+  - Dispatches to `part1`, `part2`, `part3`, `part4`, `diagnostics`, or `all`.
+
 - `Part1Preprocessing.cs`
-	- Functional core for Part 1 data ingestion, forward-fill, feature generation, split-first preprocessing, and compact auditing.
-	- Key outputs:
-		- `FeatureRow` matrix (persisted dataset)
-		- `PreprocessingAuditEvent` CSV (event-level)
-		- `PreprocessingAuditSummary` JSON
+  - Loads raw CSV input.
+  - Deduplicates timestamps with keep-last behavior.
+  - Imputes required numeric values.
+  - Adds calendar and cyclical features.
+  - Applies split-first preprocessing rules to avoid leakage.
+
 - `Part2FeatureEngineering.cs`
-	- Functional core for Part 2 lag features, rolling statistics, and multi-step label construction (`t+1..t+192`).
-	- Key outputs:
-		- `Part2SupervisedRow` matrix
-		- `Part2DatasetSummary` JSON
+  - Builds lag features and rolling statistics.
+  - Builds one supervised row per valid anchor.
+  - Produces 192-step target vectors.
+  - Applies split/purge rules for leakage-safe training and validation.
+
 - `Part3Modeling.cs`
-	- Functional core for Part 3 model training and validation forecasting.
-	- Uses a model plug-in seam (`IForecastingModel`) and registry-driven execution.
-	- Models:
-		- Seasonal baseline (`BaselineSeasonal`)
-		- ML.NET FastTree recursive one-step model (`FastTreeRecursive`)
-	- Optional capabilities:
-		- `IPermutationImportanceModel` for models that can provide PFI metrics.
-	- Key outputs:
-		- `Part3ForecastRow` prediction matrix
-		- `Part3RunSummary` JSON
-	- Runtime optimization:
-		- Indexed history lookups + incremental rolling windows for recursive inference (see ADR 002).
-- `tests/Forecasting.App.Tests`
-	- Unit tests for Part 1 and Part 2 behavior, including split/purge boundaries and artifact writing paths.
+  - Trains models and runs forecasting.
+  - Contains the baseline model and FastTree recursive model.
+  - Owns recursive inference logic, feature projection, and optional PFI.
 
-## Data Flow
+- `Part4Evaluation.cs`
+  - Evaluates validation forecasts only.
+  - Computes `MAE`, `RMSE`, and `MAPE`.
+  - Produces a deterministic sample of forecast-vs-actual points.
 
-1. Raw ingestion (Part 1)
-	 - Input: `data/testdata.csv`, `data/holidays.public.csv`
-	 - Build typed rows, deduplicate by `utcTime` (keep-last), impute required numeric values, and generate calendar/cyclical features.
-2. Split-first evaluation preprocessing (Part 1)
-	 - Validation starts at last timestamp minus 30 days.
-	 - Forward-fill is applied per segment to avoid cross-boundary target leakage.
-	 - Validation rows with target imputed from training context are excluded from persisted dataset.
-	 - Persist feature matrix and compact audit artifacts.
-3. Supervised dataset assembly (Part 2)
-	 - Input: Part 1 feature matrix CSV.
-	 - Deduplicate again (defensive keep-last), compute lag/rolling features causally, build full 192-step horizon labels.
-	 - Apply anchor split/purge rules to prevent train/validation leakage for multi-step targets.
-	 - Persist supervised matrix and summary JSON.
-4. Forecast modeling and inference (Part 3)
-	 - Input: Part 2 supervised matrix CSV.
-	 - Train on `Split=Train`, forecast on `Split=Validation`.
-	 - Produce full 192-step horizon predictions for both models.
-	 - For recursive FastTree inference, use indexed history + incremental rolling statistics to keep per-step feature updates efficient.
-	 - Persist predictions CSV and run summary JSON.
+- `PartDiagnostics.cs`
+  - Produces pre-model and post-model diagnostics.
+  - Writes CSV, SVG, and HTML artifacts for inspection.
 
-## Leakage Controls
+## Key Design Choices
 
-- Part 1:
-	- Split-first preprocessing with explicit validation boundary.
-	- Filtering of validation rows whose target value was imputed from training context.
-- Part 2:
-	- Feature windows are causal (history up to anchor time only).
-	- Split eligibility considers horizon end for train anchors.
-	- Boundary anchors are purged when future labels would overlap validation.
-- Part 3:
-	- Training uses only `Split=Train` anchors.
-	- Validation inference is recursive and uses only historical/previously predicted target values at each step.
+These are the main choices that shape the current program.
+
+### 1. Fixed forecasting contract
+
+- The pipeline always predicts exactly `192` future steps.
+- Each forecast is a full ordered vector `t+1..t+192`.
+- Parts 2, 3, and 4 all use the same contract.
+
+### 2. Time-based, leakage-safe workflow
+
+- Data is treated as an ordered time series, not shuffled samples.
+- Features are causal.
+- Training uses only `Split=Train` rows.
+- Evaluation uses validation forecasts only.
+
+### 3. Registry-driven Part 3 models
+
+- `IForecastingModel` is the extension seam for forecasting models.
+- `CreateModelRegistry(...)` is the single registration point for models.
+- `RunModels(...)` does not branch on model names.
+
+This makes it easy to add more models without rewriting orchestration.
+
+### 4. Centralized feature projection
+
+- `FeatureSnapshot` is the full recursive-state object.
+- `FeatureSchema` decides which fields are actually used by the ML model.
+- The same schema controls feature vector order, exported feature names, and PFI slot names.
+
+This keeps training, inference, and feature-importance analysis aligned.
+
+### 5. Recursive engine separated from scorer logic
+
+- `PredictRecursively(...)` owns the recursive mechanics:
+  - step timing
+  - calendar lookup
+  - target-history lookup
+  - lag updates
+  - rolling-window updates
+  - feeding predictions back into history
+- Production FastTree scoring plugs into that engine through a scorer callback.
+- Tests use the same engine with deterministic oracle scorers.
+
+This is the main reason the recursive logic is easy to test without depending on ML.NET internals.
+
+### 6. Explicit recursive state
+
+- `RecursiveHistoryState` manages truncated history plus appended predictions.
+- `RollingWindowStats` manages incremental rolling mean/std updates.
+
+This keeps recursive state local and makes leakage boundaries easier to reason about.
+
+### 7. Two-model comparison setup
+
+- `BaselineSeasonal` is a deterministic reference model.
+- `FastTreeRecursive` is the ML model.
+- Both emit the same 192-step output shape so Part 4 can compare them directly.
+
+## Current Part 3 Behavior
+
+The current recursive forecasting behavior is:
+
+- target-derived features update recursively from observed/predicted history
+- calendar features roll forward with forecast time
+- holiday context may roll forward since known from timestamp context
+- exogenous weather features are frozen at the anchor during recursion
+- non-finite ML scores fall back to the current recursive target value
 
 ## Runtime Artifacts
 
-- Part 1 artifacts (default):
-	- `artifacts/part1_feature_matrix.csv`
-	- `artifacts/part1_feature_matrix.audit.csv`
-	- `artifacts/part1_feature_matrix.audit.summary.json`
-- Part 2 artifacts (`part2` mode):
-	- `artifacts/part2_supervised_matrix.csv`
-	- `artifacts/part2_supervised_matrix.summary.json`
-- Part 3 artifacts (`part3` mode):
-	- `artifacts/part3_predictions.csv`
-	- `artifacts/part3_predictions.summary.json`
+- Part 1:
+  - `artifacts/part1_feature_matrix.csv`
+  - `artifacts/part1_feature_matrix.audit.csv`
+  - `artifacts/part1_feature_matrix.audit.summary.json`
 
-## Adding a Part 3 Model
+- Part 2:
+  - `artifacts/part2_supervised_matrix.csv`
+  - `artifacts/part2_supervised_matrix.summary.json`
 
-Use this flow to add a new forecasting model without changing central orchestration logic.
+- Part 3:
+  - `artifacts/part3_predictions.csv`
+  - `artifacts/part3_predictions.summary.json`
+  - optional PFI artifacts
 
-1. Implement the model contract in `src/Forecasting.App/Part3Modeling.cs`:
-	- Add a class implementing `IForecastingModel` with:
-		- `ModelName` (stable output name written to artifacts)
-		- `Train(IReadOnlyList<Part2SupervisedRow> trainRows, IReadOnlyList<Part2SupervisedRow> allRows)`
-		- `Predict(Part2SupervisedRow anchor)` returning `(Predictions, FallbackSteps)`
-2. If the model supports permutation feature importance, also implement `IPermutationImportanceModel` and return `Part3PfiResult` from `ComputePermutationImportance(...)`.
-3. Register the model in `CreateModelRegistry(...)` in `src/Forecasting.App/Part3Modeling.cs`.
-4. Keep output contract compatibility:
-	- Return exactly `PipelineConstants.HorizonSteps` predictions.
-	- Use deterministic `ModelName` (used by Part 4 and diagnostics grouping).
-	- Ensure fallback counter semantics are explicit and deterministic.
-5. Add tests in `tests/Forecasting.App.Tests/Part3ModelingTests.cs`:
-	- Model appears in `Part3RunSummary.Models`.
-	- Forecast rows are emitted for both `Train` and `Validation` anchors.
-	- Predictions are finite and horizon length is correct.
-	- Any model-specific fallback behavior is validated.
+- Part 4:
+  - evaluation artifacts under `artifacts/`
 
-Because `RunModels(...)` iterates over the registry, adding a model should only require model class + registry + tests, not orchestration rewrites.
+- Diagnostics:
+  - CSV, SVG, and HTML outputs under `artifacts/diagnostics/`
 
-## Architectural Style
+## When to Use an ADR
 
-- Functional core / imperative shell:
-	- Core transformations are implemented as pure/static methods over typed records where practical.
-	- File I/O and CLI concerns remain at the outer edge (`Program.cs`, CSV/JSON writers).
-- Deterministic preprocessing:
-	- Duplicate handling, split rules, and persisted summaries are explicit and reproducible.
+Use `docs/decisions/*.md` when a design choice has meaningful alternatives and you want a stable record of why one option was chosen.
+
+Examples:
+
+- choosing recursive vs direct forecasting
+- choosing a new exogenous-input policy
+- choosing a new modeling architecture
+- choosing a different split or purge strategy
+
+Use this architecture document for the current structure of the system and the main extension/testability patterns.

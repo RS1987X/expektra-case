@@ -44,8 +44,7 @@ public static class PipelineCliRequestParser
                     ["part3SummaryJson"] = Path.Combine("artifacts", "part3_predictions.summary.json"),
                     ["part3FeatureImportanceCsv"] = Path.Combine("artifacts", "part3_feature_importance.csv"),
                     ["part4MetricsCsv"] = Path.Combine("artifacts", "part4_metrics.csv"),
-                    ["part4SampleCsv"] = Path.Combine("artifacts", "part4_pred_vs_actual_sample.csv"),
-                    ["diagnosticsDirectory"] = Path.Combine("artifacts", "diagnostics")
+                    ["part4SampleCsv"] = Path.Combine("artifacts", "part4_pred_vs_actual_sample.csv")
                 });
         }
 

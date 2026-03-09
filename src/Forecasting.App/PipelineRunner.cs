@@ -57,7 +57,6 @@ public static class PipelineRunner
         var part3PfiOutputPath = GetRequired(request.OutputPaths, "part3FeatureImportanceCsv");
         var part4MetricsOutputPath = GetRequired(request.OutputPaths, "part4MetricsCsv");
         var part4SampleOutputPath = GetRequired(request.OutputPaths, "part4SampleCsv");
-        var diagnosticsOutputDirectory = GetRequired(request.OutputPaths, "diagnosticsDirectory");
         var validationWindowDays = request.ValidationWindowDays ?? PipelineConstants.DefaultValidationWindowDays;
 
         if (!File.Exists(dataPath) || !File.Exists(holidaysPath))
@@ -70,7 +69,7 @@ public static class PipelineRunner
         }
 
         var lines = new List<string>();
-        AddOutputLine(lines, "Running full pipeline (Part 1 -> Part 4 + diagnostics)...", output);
+        AddOutputLine(lines, "Running full pipeline (Part 1 -> Part 4)...", output);
 
         var preprocessed = Part1Preprocessing.BuildPreprocessedDatasetForEvaluation(dataPath, holidaysPath, validationWindowDays);
         Part1Preprocessing.WriteFeatureMatrixCsv(preprocessed.PersistedFeatures, part1OutputPath);
@@ -92,6 +91,15 @@ public static class PipelineRunner
         {
             Part3Modeling.WriteFeatureImportanceCsv(part3Result.FeatureImportance, part3PfiOutputPath);
             AddOutputLine(lines, $"Part 3 PFI complete: {part3Result.FeatureImportance.Features.Count} features for horizon t+{part3Result.FeatureImportance.HorizonStep} -> {part3PfiOutputPath}", output);
+
+            if (part3Result.FeatureImportance.PerSeedDetails is { Count: > 0 })
+            {
+                var perSeedPath = Path.Combine(
+                    Path.GetDirectoryName(part3PfiOutputPath) ?? "artifacts",
+                    "part3_feature_importance_per_seed.csv");
+                Part3Modeling.WriteFeatureImportancePerSeedCsv(part3Result.FeatureImportance, perSeedPath);
+                AddOutputLine(lines, $"Part 3 PFI per-seed detail -> {perSeedPath}", output);
+            }
         }
 
         AddOutputLine(lines, $"Part 3 complete: {part3Result.Forecasts.Count} forecasts -> {part3OutputPath}", output);
@@ -108,10 +116,6 @@ public static class PipelineRunner
             AddOutputLine(lines, $"Part 4 complete: {plot.ModelName} validation rollout CSV (48h, 15-min cadence) -> {plot.CsvPath}", output);
             AddOutputLine(lines, $"Part 4 complete: {plot.ModelName} validation rollout SVG (48h, 15-min cadence) -> {plot.SvgPath}", output);
         }
-
-        var diagnosticsResult = PartDiagnostics.RunDiagnostics(part3Rows, part3Result.Forecasts, part3Result.FeatureImportance?.Features);
-        PartDiagnostics.WriteArtifacts(diagnosticsResult, diagnosticsOutputDirectory);
-        AddOutputLine(lines, $"Diagnostics complete: {diagnosticsOutputDirectory}", output);
 
         WriteRunManifest(
             outputDirectory: "artifacts",
@@ -215,6 +219,15 @@ public static class PipelineRunner
         {
             Part3Modeling.WriteFeatureImportanceCsv(part3Result.FeatureImportance, part3PfiPath);
             AddOutputLine(lines, $"Saved Part 3 PFI (horizon t+{part3Result.FeatureImportance.HorizonStep}) to: {part3PfiPath}", output);
+
+            if (part3Result.FeatureImportance.PerSeedDetails is { Count: > 0 })
+            {
+                var perSeedPath = Path.Combine(
+                    Path.GetDirectoryName(part3PfiPath) ?? "artifacts",
+                    "part3_feature_importance_per_seed.csv");
+                Part3Modeling.WriteFeatureImportancePerSeedCsv(part3Result.FeatureImportance, perSeedPath);
+                AddOutputLine(lines, $"Saved Part 3 PFI per-seed detail to: {perSeedPath}", output);
+            }
         }
 
         AddOutputLine(lines, $"Part 3 models: {string.Join(", ", part3Result.Summary.Models.Select(model => model.ModelName))}", output);

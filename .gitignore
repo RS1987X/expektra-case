@@ -6,3 +6,5 @@ artifacts/
 **/TestResults/
 **/*.coverage
 **/coverage.cobertura.xml
+.scripts
+.venv

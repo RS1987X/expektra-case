@@ -85,7 +85,8 @@ Utifrån problemtyp och resultat bedömer jag följande som viktigast:
 - Modellera och prediktera exogena variabler för att kunna rulla fram dessa i rekursiva loopen. 
 - Lägga till probabilistiska prognoser (prediktionsintervall), inte bara punktprognos.
 - Implementera fler modeller
-- Prallellisera genom att dela upp anchors 
+- Parallellisera genom anchors partitioner 
+- Mutations testning för mäta testkvalitet 
 
 ### 4. Hur skulle du hantera konceptdrift?
 Kombinera örvaking, snabb detektion och kontrollerad omträning:

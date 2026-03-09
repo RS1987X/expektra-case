@@ -6,7 +6,7 @@ namespace Forecasting.App;
 
 public static partial class Part3Modeling
 {
-    private const int PfiPermutationCount = 10;
+
     private static readonly CultureInfo InvariantCulture = CultureInfo.InvariantCulture;
 
     private sealed record FeatureSchemaEntry(string Name, Func<FeatureSnapshot, float> Selector);
@@ -203,7 +203,8 @@ public static partial class Part3Modeling
 
         public Part3PfiResult? ComputePermutationImportance(IReadOnlyList<Part2SupervisedRow> validationRows, int pfiHorizonStep)
         {
-            return Part3Modeling.ComputePermutationImportance(RequireModel(), validationRows, pfiHorizonStep);
+            return Part3Modeling.ComputeMultiSeedPermutationImportance(
+                RequireModel(), validationRows, pfiHorizonStep, _options);
         }
 
         private FastTreeRecursiveModel RequireModel()
@@ -377,9 +378,14 @@ public static partial class Part3Modeling
 
         // Compute PFI on validation data only when explicitly requested (it is expensive).
         var pfiModel = modelRegistry.OfType<IPermutationImportanceModel>().FirstOrDefault();
-        var pfiResult = enablePfi && pfiModel is not null
-            ? pfiModel.ComputePermutationImportance(validationRows, pfiHorizonStep)
-            : null;
+        Part3PfiResult? pfiResult = null;
+        if (enablePfi && pfiModel is not null)
+        {
+            var pfiSw = System.Diagnostics.Stopwatch.StartNew();
+            pfiResult = pfiModel.ComputePermutationImportance(validationRows, pfiHorizonStep);
+            pfiSw.Stop();
+            Console.Error.WriteLine($"[TIMING] PFI (horizon t+{pfiHorizonStep}): {pfiSw.Elapsed.TotalSeconds:F2}s");
+        }
 
         var forecasts = new List<Part3ForecastRow>(forecastAnchors.Count * modelRegistry.Count);
         var recursiveStepsByModel = modelRegistry.ToDictionary(model => model.ModelName, _ => 0, StringComparer.Ordinal);
@@ -409,7 +415,7 @@ public static partial class Part3Modeling
             Console.Error.WriteLine($"[TIMING] {model.ModelName} Inference: {inferenceTimers[model.ModelName].Elapsed.TotalSeconds:F2}s ({forecastAnchors.Count} anchors)");
         }
         sw.Stop();
-        Console.Error.WriteLine($"[TIMING] Part3 total (train+infer): {sw.Elapsed.TotalSeconds:F2}s");
+        Console.Error.WriteLine($"[TIMING] Part3 total (train+pfi+infer): {sw.Elapsed.TotalSeconds:F2}s");
 
         var modelSummaries = modelRegistry
             .Select(model => new Part3ModelSummary(
@@ -442,7 +448,8 @@ public static partial class Part3Modeling
     private static Part3PfiResult? ComputePermutationImportance(
         FastTreeRecursiveModel model,
         IReadOnlyList<Part2SupervisedRow> validationRows,
-        int pfiHorizonStep)
+        int pfiHorizonStep,
+        int permutationCount)
     {
         if (validationRows.Count == 0)
         {
@@ -464,7 +471,7 @@ public static partial class Part3Modeling
             model.Transformer,
             dataView,
             labelColumnName: nameof(OneStepModelInput.Label),
-            permutationCount: PfiPermutationCount,
+            permutationCount: permutationCount,
             useFeatureWeightFilter: false);
 
         var features = pfi
@@ -491,7 +498,97 @@ public static partial class Part3Modeling
                 f.R2DeltaStdDev))
             .ToList();
 
-        return new Part3PfiResult(features, PfiPermutationCount, validationRows.Count, pfiHorizonStep);
+        return new Part3PfiResult(features, permutationCount, validationRows.Count, pfiHorizonStep);
+    }
+
+    private static Part3PfiResult? ComputeMultiSeedPermutationImportance(
+        FastTreeRecursiveModel primaryModel,
+        IReadOnlyList<Part2SupervisedRow> validationRows,
+        int pfiHorizonStep,
+        FastTreeOptions options)
+    {
+        if (validationRows.Count == 0)
+            return null;
+
+        if (options.PfiModelSeeds <= 1)
+            return ComputePermutationImportance(primaryModel, validationRows, pfiHorizonStep, options.PfiPermutationCount);
+
+        // Run PFI on the primary model + (PfiModelSeeds - 1) models with different seeds.
+        var allRuns = new List<Part3PfiResult>();
+        var primary = ComputePermutationImportance(primaryModel, validationRows, pfiHorizonStep, options.PfiPermutationCount);
+        if (primary != null)
+            allRuns.Add(primary);
+
+        // Train additional models with varied seeds and run PFI on each.
+        // We need trainRows and allRows — extract from primaryModel's history.
+        for (int i = 1; i < options.PfiModelSeeds; i++)
+        {
+            var seedOptions = options with { Seed = options.Seed + i };
+            var mlContext = new MLContext(seed: seedOptions.Seed);
+
+            var validationData = validationRows
+                .Select(row => new OneStepModelInput
+                {
+                    Features = ToFeatureVector(row),
+                    Label = (float)row.HorizonTargets[pfiHorizonStep - 1]
+                })
+                .ToList();
+
+            var schema = BuildTrainingRowSchemaDefinition();
+
+            // Build a lightweight model for PFI only (reuse primary model's training data view).
+            // We build from the same trainRows by filtering allRows to Split=="Train".
+            var trainRows = primaryModel.RowByTimestamp.Values
+                .Where(r => r.Split == "Train")
+                .ToList();
+            var allRows = primaryModel.RowByTimestamp.Values.ToList();
+            var altModel = BuildFastTreeRecursiveModel(trainRows, allRows, seedOptions);
+
+            var result = ComputePermutationImportance(altModel, validationRows, pfiHorizonStep, options.PfiPermutationCount);
+            if (result != null)
+                allRuns.Add(result);
+        }
+
+        // Aggregate: average MaeDelta per feature across all runs, re-rank.
+        var featureNames = allRuns[0].Features.Select(f => f.FeatureName).ToList();
+        var aggregated = featureNames.Select(name =>
+        {
+            var perRun = allRuns
+                .SelectMany(r => r.Features)
+                .Where(f => f.FeatureName == name)
+                .ToList();
+
+            return new
+            {
+                Name = name,
+                MaeDelta = perRun.Average(f => f.MaeDelta),
+                MaeDeltaStdDev = Math.Sqrt(perRun.Sum(f => f.MaeDeltaStdDev * f.MaeDeltaStdDev) / perRun.Count),
+                RmseDelta = perRun.Average(f => f.RmseDelta),
+                RmseDeltaStdDev = Math.Sqrt(perRun.Sum(f => f.RmseDeltaStdDev * f.RmseDeltaStdDev) / perRun.Count),
+                R2Delta = perRun.Average(f => f.R2Delta),
+                R2DeltaStdDev = Math.Sqrt(perRun.Sum(f => f.R2DeltaStdDev * f.R2DeltaStdDev) / perRun.Count),
+            };
+        })
+        .OrderByDescending(f => Math.Abs(f.MaeDelta))
+        .Select((f, rank) => new Part3PfiFeatureResult(
+            rank + 1, f.Name,
+            f.MaeDelta, f.MaeDeltaStdDev,
+            f.RmseDelta, f.RmseDeltaStdDev,
+            f.R2Delta, f.R2DeltaStdDev))
+        .ToList();
+
+        // Build per-seed detail table so rank stability can be inspected.
+        var perSeedDetails = new List<Part3PfiSeedDetail>();
+        for (int runIdx = 0; runIdx < allRuns.Count; runIdx++)
+        {
+            var seed = options.Seed + runIdx;
+            foreach (var f in allRuns[runIdx].Features)
+            {
+                perSeedDetails.Add(new Part3PfiSeedDetail(seed, f.FeatureName, f.Rank, f.MaeDelta));
+            }
+        }
+
+        return new Part3PfiResult(aggregated, options.PfiPermutationCount, validationRows.Count, pfiHorizonStep, perSeedDetails);
     }
 
     private static SeasonalBaselineModel BuildSeasonalBaseline(IReadOnlyList<Part2SupervisedRow> trainRows)
@@ -567,7 +664,8 @@ public static partial class Part3Modeling
 
         var schema = BuildTrainingRowSchemaDefinition();
         var dataView = mlContext.Data.LoadFromEnumerable(trainingData, schema);
-        var trainer = mlContext.Regression.Trainers.FastTree(new Microsoft.ML.Trainers.FastTree.FastTreeRegressionTrainer.Options
+
+        var trainerOptions = new Microsoft.ML.Trainers.FastTree.FastTreeRegressionTrainer.Options
         {
             FeatureColumnName = nameof(OneStepModelInput.Features),
             LabelColumnName = nameof(OneStepModelInput.Label),
@@ -575,9 +673,25 @@ public static partial class Part3Modeling
             NumberOfLeaves = options.NumberOfLeaves,
             MinimumExampleCountPerLeaf = options.MinimumExampleCountPerLeaf,
             LearningRate = options.LearningRate
-        });
+        };
 
-        var model = trainer.Fit(dataView);
+        ITransformer model;
+        if (options.EnableEarlyStopping)
+        {
+            trainerOptions.EarlyStoppingRule = new Microsoft.ML.Trainers.FastTree.TolerantEarlyStoppingRule();
+            trainerOptions.EarlyStoppingMetric = Microsoft.ML.Trainers.FastTree.EarlyStoppingMetric.L1Norm;
+            // Split off 10% for early stopping validation (chronological tail to avoid leakage).
+            var splitIndex = (int)(trainingData.Count * 0.9);
+            var earlyStopTrain = mlContext.Data.LoadFromEnumerable(trainingData.Take(splitIndex).ToList(), schema);
+            var earlyStopValid = mlContext.Data.LoadFromEnumerable(trainingData.Skip(splitIndex).ToList(), schema);
+            var trainer = mlContext.Regression.Trainers.FastTree(trainerOptions);
+            model = trainer.Fit(earlyStopTrain, earlyStopValid);
+        }
+        else
+        {
+            var trainer = mlContext.Regression.Trainers.FastTree(trainerOptions);
+            model = trainer.Fit(dataView);
+        }
 
         var predictionEngine = mlContext.Model.CreatePredictionEngine<OneStepModelInput, OneStepPrediction>(
             model, inputSchemaDefinition: schema);

@@ -17,6 +17,7 @@ public class PipelineCliAndRunnerTests
         Assert.Null(request.MaxPart3Rows);
         Assert.Equal(Path.Combine("data", "testdata.csv"), request.InputPaths["data"]);
         Assert.Equal(Path.Combine("artifacts", "part3_predictions.csv"), request.OutputPaths["part3PredictionsCsv"]);
+        Assert.DoesNotContain("diagnosticsDirectory", request.OutputPaths.Keys);
     }
 
     [Fact]
