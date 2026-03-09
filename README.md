@@ -27,13 +27,13 @@ dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part4
 dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- diagnostics
 ```
 
-Kör Part 3 med permutation feature importance (PFI):
+Kör med permutation feature importance (PFI):
 
 ```bash
-dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part3 --pfi
+dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- --pfi
 ```
 
-Valfri PFI-horisont (standard är `t+1`, tillåtet intervall `1..192`):
+Köra part3 med valfri PFI-horisont (standard är `t+1`, tillåtet intervall `1..192`):
 
 ```bash
 dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part3 --pfi --pfi-horizon 96
@@ -42,7 +42,7 @@ dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- part3 --pfi -
 Snabb smoke-körning genom att begränsa Part 3-underlaget (behåller både Train/Validation):
 
 ```bash
-dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- all --max-rows 120
+dotnet run --project src/Forecasting.App/Forecasting.App.csproj -- all --max-rows 5000
 ```
 
 Flaggan `--max-rows` kan användas med både `all` och `part3` för snabbare verifieringskörningar.
@@ -60,30 +60,24 @@ och `part4_baselineseasonal_validation_tplus92_48h.csv` med tillhörande .svg-pl
 ## Del 5 - Reflektion och dokumentation
 
 ### 1. Vilka modelleringsval gjorde du och varför?
-Jag valde att implementera naiv säsongmodell och rekursiv FastTree för göra en robust implementation.
+Jag valde att implementera naiv säsongmodell och rekursiv FastTree för att fokusera på en robust implementation.
 Modelleringsvalen jag gjorde i form av features var de som specificerades i uppgiften. 
 
-Permutation Feature Importance (PFI) används för att se vilka variabler som påverkar mest och modellinstabilitet genom multi-seed PFI (PFI körs flera gånger). Valde PFI framför impurity-mått då det svarar på frågan vilka features som pårverkar prognostisering mest istället för impurity-mått som svarar på frågan vilka features som påverkar trädkonstruktionen mest.  
+Permutation Feature Importance (PFI) används för att se vilka variabler som påverkar mest och modellinstabilitet genom multi-seed PFI (PFI körs flera gånger, se PipelineConfig). Valde PFI framför impurity-mått då det svarar på frågan vilka features som pårverkar prognostisering mest, istället för impurity-mått som svarar på frågan vilka features som påverkar trädkonstruktionen mest.  
 
 Träning och validerings split görs innan preprocessing för att kunna rensa validerings set från forwardfill mellan träning och validerings set, viktig princip för att hantera mer komplicerad preprocess-metodik. På samma sätt förhindras läckage mellan träning och validering genom att ta bort validerings punkter som ligger inom prediktionshorisonten t+192 från gränsen mellan träning och validerings set, då träning på targets som också finns i validerings setet innebär läckage av information.
 
 ### 2. Vilka features visade sig viktigast (eller bedöms vara viktigast) och hur motiverar du det?
-Enligt Perfmutation Feature Importance baserat på validerings setet med en prediktions horizont på 24h (96 steg) med permutation count satt till 10 är de viktigaste variablerna `HourOfDay`, `Target192LagMean96`, `TargetLag192Std96`,`Temperature`. Lägre men ändå till synes signifikant effekt () är `DayOfWeek`,`Windspeed`, och `MinuteOfHour` () Temp fångar ju långsiktig
-
-Utifrån problemtyp och resultat bedömer jag följande som viktigast:
-- `TargetLag192` och `TargetLag672`: fångar stark dygns- och veckosäsong i energiförbrukning.
-- Rullande statistik (`TargetMean16/96`, `TargetStd16/96`): ger lokal nivå och volatilitet, vilket hjälper modellen att anpassa sig till kortsiktiga regimskiften.
-- Kalender/cykliska features (`HourSin/Cos`, `WeekdaySin/Cos`, helgdag): beskriver periodiska mönster som inte fullt ut förklaras av laggar.
-- Exogena features (`Temperature`, `Windspeed`, `SolarIrradiation`): viktiga framför allt under väderkansliga perioder, men ofta sekundara till laggar i kort horisont. Temperature fångar även tid på året dynamiken som syns tydligt på en plot över target över tid.
+Enligt PFI baserat på validerings-setet med en prediktions horizont på 24h (96 steg) med permutation count 10 är de viktigaste variablerna `TargetLag192`, `TargetLag672`, `HourCos`,`Temperature`. Lägre men ändå till synes signifikant effekt har `TargetLag192Mean96`,`HourOfDay`, och `HourSin`. 
 
 ### 3. Vad skulle du göra annorlunda eller lägga till med mer tid?
-- Köra tidsserie-CV med flera rullande foldar. I det fallet kan behöva rensa ut valideringspunker i slutet av varje fold baserat på pga rullande features.
+- Köra tidsserie-CV med flera rullande foldar. I det fallet behöver man rensa ut valideringspunker i slutet av varje fold pga rullande features.
 - Införa 3-way split (Train/Validation/Holdout): använda Validering för hyperparameter-tuning och feature selection, och en separat Holdout för slutlig utvärdering.
 - Träna om en reducerad modell efter feature importance/feature selection och undersökning av korrelerade features och jämföra den mot full modell samt baseline på Holdout.
 - Modellera och prediktera exogena variabler för att kunna rulla fram dessa i rekursiva loopen. 
 - Lägga till probabilistiska prognoser (prediktionsintervall), inte bara punktprognos.
 - Implementera fler modeller
-- Parallellisera genom anchors partitioner 
+- Parallellisera genom anchors-partitioner 
 - Mutations testning för mäta testkvalitet 
 
 ### 4. Hur skulle du hantera konceptdrift?
