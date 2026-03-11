@@ -197,7 +197,7 @@ Implement at least two forecasting models for multi-step prediction using the Pa
 To satisfy Del 3 with clear comparability and manageable implementation effort in .NET:
 
 1. **Model A (Baseline): Naive seasonal profile**
-	- Predict next 48h (192 steps at 15-minute resolution) as a full horizon vector `t+1..t+192`, using historical average for each future step’s weekday + quarter-hour bucket.
+	- Predict next 48h (192 steps at 15-minute resolution) as a full horizon vector `t+1..t+192`, using historical average for each future step’s weekday + hour bucket.
 	- Serves as reference baseline.
 2. **Model B (ML): ML.NET FastTree regression**
 	- Use `Microsoft.ML` FastTree as the required ML model.
@@ -229,7 +229,7 @@ To satisfy Del 3 with clear comparability and manageable implementation effort i
 
 - “At least two models, one ML” is satisfied by **Baseline + FastTree**.
 - For multi-step strategy in FastTree, choose **recursive strategy** for Part 3 (single-step learner rolled forward to 192 steps).
-- Baseline prediction key is `(DayOfWeek, HourOfDay, MinuteOfHour)`; if key is unseen in training, fallback to global training mean.
+- Baseline prediction key is `(DayOfWeek, HourOfDay)`; if key is unseen in training, fallback to global training mean.
 - Predictions are generated for all 192 horizons, producing a deterministic vector in timestamp order.
 - Baseline and FastTree are compared on the same output contract: one 192-step prediction vector per anchor (`t+1..t+192`).
 - FastTree training uses only rows with `Split=Train`; validation rows are never used for fitting.
@@ -272,7 +272,7 @@ With these defaults, Part 3 implementation ambiguities are considered resolved u
 	- prediction vector result (`192` outputs)
 	- model interface with `Train(...)` and `PredictHorizon(...)`
 2. Implement baseline model
-	- aggregate train rows by `(DayOfWeek, HourOfDay, MinuteOfHour)`
+	- aggregate train rows by `(DayOfWeek, HourOfDay)`
 	- generate 192-step forecast for each anchor
 	- add global-mean fallback
 3. Implement FastTree recursive model

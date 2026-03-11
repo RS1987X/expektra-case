@@ -94,7 +94,7 @@ public class Phase0CharacterizationTests
                 AnchorUtcTime: new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 Split: "Validation",
                 ModelName: "FastTreeRecursive",
-                ExogenousFallbackSteps: 0,
+                FallbackOrRecursiveSteps: 0,
                 PredictedTargets: Enumerable.Repeat(101d, PipelineConstants.HorizonSteps).ToArray(),
                 ActualTargets: Enumerable.Repeat(100d, PipelineConstants.HorizonSteps).ToArray());
 
@@ -107,7 +107,7 @@ public class Phase0CharacterizationTests
                     "anchorUtcTime",
                     "Split",
                     "Model",
-                    "ExogenousFallbackSteps"
+                    "FallbackOrRecursiveSteps"
                 }
                 .Concat(Enumerable.Range(1, PipelineConstants.HorizonSteps).Select(step => $"Pred_tPlus{step}"))
                 .Concat(Enumerable.Range(1, PipelineConstants.HorizonSteps).Select(step => $"Actual_tPlus{step}")));

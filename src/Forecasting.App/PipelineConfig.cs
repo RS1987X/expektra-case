@@ -24,6 +24,9 @@ public static class FeatureConfig
 /// <summary>
 /// ML hyperparameters for the FastTree recursive model, passed as a value so callers can override defaults.
 /// </summary>
+public sealed record BaselineSeasonalOptions(
+    int? LookbackWeeks = 8);
+
 public sealed record FastTreeOptions(
     int NumberOfTrees = 100,
     int NumberOfLeaves = 18,
@@ -31,5 +34,5 @@ public sealed record FastTreeOptions(
     double LearningRate = 0.05,
     bool EnableEarlyStopping = false,
     int PfiPermutationCount = 10,
-    int PfiModelSeeds = 1,
+    int PfiModelSeeds = 10,
     int Seed = 42);

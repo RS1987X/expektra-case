@@ -155,7 +155,7 @@ public class Part3ModelingTests
         var baseline = Assert.Single(result.Forecasts.Where(f =>
             f.ModelName == "BaselineSeasonal" &&
             f.AnchorUtcTime == validationAnchorTime));
-        Assert.True(baseline.ExogenousFallbackSteps > 0);
+        Assert.True(baseline.FallbackOrRecursiveSteps > 0);
     }
 
     [Fact]
@@ -177,7 +177,6 @@ public class Part3ModelingTests
         var expectedFirstStep = trainRows
             .Where(row => row.DayOfWeek == (int)firstStepTimestamp.DayOfWeek)
             .Where(row => row.HourOfDay == firstStepTimestamp.Hour)
-            .Where(row => row.MinuteOfHour == firstStepTimestamp.Minute)
             .Select(row => row.TargetAtT)
             .DefaultIfEmpty(trainRows.Average(row => row.TargetAtT))
             .Average();
@@ -210,12 +209,12 @@ public class Part3ModelingTests
             f.Split == "Validation"));
 
         var expectedGlobalMean = trainRows.Average(row => row.TargetAtT);
-        Assert.Equal(PipelineConstants.HorizonSteps, baseline.ExogenousFallbackSteps);
+        Assert.Equal(PipelineConstants.HorizonSteps, baseline.FallbackOrRecursiveSteps);
         Assert.All(baseline.PredictedTargets, value => Assert.Equal(expectedGlobalMean, value, 8));
     }
 
     [Fact]
-    public void RunModels_BaselineUsesExactSeasonalKeyMean_WhenKeyExists()
+    public void RunModels_BaselineUsesSameWeekdayHourMean_WhenKeyExists()
     {
         var trainRows = new List<Part2SupervisedRow>
         {
@@ -239,6 +238,74 @@ public class Part3ModelingTests
             f.Split == "Validation"));
 
         Assert.Equal(12.0, baseline.PredictedTargets[0], 8);
+    }
+
+    [Fact]
+    public void RunModels_BaselineIgnoresMinuteWithinSameWeekdayHourBucket()
+    {
+        var trainRows = new List<Part2SupervisedRow>
+        {
+            // Tuesday 00:* values should be averaged together for step 1.
+            CreateOracleRow(new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc), targetAtT: 10.0, temperature: 1.0, split: "Train"),
+            CreateOracleRow(new DateTime(2024, 1, 9, 0, 15, 0, DateTimeKind.Utc), targetAtT: 14.0, temperature: 1.0, split: "Train")
+        };
+
+        var validationAnchor = CreateOracleRow(
+            new DateTime(2024, 1, 1, 23, 45, 0, DateTimeKind.Utc),
+            targetAtT: 50.0,
+            temperature: 1.0,
+            split: "Validation");
+
+        var rows = trainRows.Concat([validationAnchor]).ToList();
+        var result = Part3Modeling.RunModels(rows);
+
+        var baseline = Assert.Single(result.Forecasts.Where(f =>
+            f.ModelName == "BaselineSeasonal" &&
+            f.AnchorUtcTime == validationAnchor.AnchorUtcTime &&
+            f.Split == "Validation"));
+
+        Assert.Equal(12.0, baseline.PredictedTargets[0], 8); // mean(10, 14) across Tuesday 00:xx hour bucket
+    }
+
+    [Fact]
+    public void RunModels_BaselineLookbackWeeks_UsesRecentWindowForSeasonalMean()
+    {
+        var keyTimestamp = new DateTime(2024, 1, 2, 0, 15, 0, DateTimeKind.Utc);
+        var oldTrain = CreateOracleRow(keyTimestamp, targetAtT: 10.0, temperature: 1.0, split: "Train");
+        var recentTrain = CreateOracleRow(keyTimestamp.AddDays(14), targetAtT: 30.0, temperature: 1.0, split: "Train");
+        var validationAnchor = CreateOracleRow(
+            new DateTime(2024, 1, 15, 0, 0, 0, DateTimeKind.Utc),
+            targetAtT: 50.0,
+            temperature: 1.0,
+            split: "Validation");
+
+        var rows = new List<Part2SupervisedRow> { oldTrain, recentTrain, validationAnchor };
+
+        var defaultResult = Part3Modeling.RunModels(rows);
+        var defaultBaseline = Assert.Single(defaultResult.Forecasts.Where(f =>
+            f.ModelName == "BaselineSeasonal" &&
+            f.AnchorUtcTime == validationAnchor.AnchorUtcTime));
+
+        var lookbackResult = Part3Modeling.RunModels(
+            rows,
+            baselineOptions: new BaselineSeasonalOptions(LookbackWeeks: 1));
+        var lookbackBaseline = Assert.Single(lookbackResult.Forecasts.Where(f =>
+            f.ModelName == "BaselineSeasonal" &&
+            f.AnchorUtcTime == validationAnchor.AnchorUtcTime));
+
+        Assert.Equal(20.0, defaultBaseline.PredictedTargets[0], 8); // mean(10, 30)
+        Assert.Equal(30.0, lookbackBaseline.PredictedTargets[0], 8); // recent window only
+    }
+
+    [Fact]
+    public void RunModels_BaselineLookbackWeeks_NonPositive_Throws()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 320, validationCount: 4);
+
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Part3Modeling.RunModels(rows, baselineOptions: new BaselineSeasonalOptions(LookbackWeeks: 0)));
+
+        Assert.Contains("lookback", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -316,7 +383,7 @@ public class Part3ModelingTests
             snapshot => snapshot.TargetAtT + snapshot.Temperature);
 
         Assert.Equal(PipelineConstants.HorizonSteps, result.Predictions.Length);
-        Assert.Equal(191, result.RecursiveStepsBeyondAnchor);
+        Assert.Equal(191, result.FallbackOrRecursiveSteps);
 
         // Future realized temperatures must not leak into the recursive loop.
         AssertPredictionPrefix(result.Predictions, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0);
@@ -340,7 +407,7 @@ public class Part3ModelingTests
             snapshot => snapshot.Temperature);
 
         Assert.Equal(PipelineConstants.HorizonSteps, result.Predictions.Length);
-        Assert.Equal(191, result.RecursiveStepsBeyondAnchor);
+        Assert.Equal(191, result.FallbackOrRecursiveSteps);
 
         AssertPredictionPrefix(result.Predictions, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
     }
