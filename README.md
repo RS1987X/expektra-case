@@ -93,5 +93,5 @@ Kombinera örvaking, snabb detektion och kontrollerad omträning:
 - Ny modell skuggkörs innan promotion.
 - Versionshantera data, features och modeller for reproducerbar rollback.
 
-### 5. Hur skalbar är lösningen for applicering pa stort antal tidsserier?
+### 5. Hur skalbar är lösningen for applicering på stort antal tidsserier?
 Pipelinen är modulär (Part 1–4) men körs helt sekventiellt med alla datastrukturer i minne. Flaskhalsen är Part 3-inferens: rekursiv 192-stegs rollout per anchor-punkt som tar ~50% av körtiden. Varje anchor-punkts (t) prediktioner är oberoende av andra anchors prediktioner, vilket ger naturlig parallelliserbarhet via Parallel.ForEach — dock inte stegen inom en rollout, som är sekventiella pga rekursionen. Modellträning (Baseline + FastTree + ...) kan såklart också parallelliseras.

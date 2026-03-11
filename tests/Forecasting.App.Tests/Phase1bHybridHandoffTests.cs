@@ -142,7 +142,7 @@ public class Phase1bHybridHandoffTests
                 anchorUtcTime,
                 split,
                 "BaselineSeasonal",
-                ExogenousFallbackSteps: 0,
+                FallbackOrRecursiveSteps: 0,
                 PredictedTargets: actualTargets.Select(v => v + 0.5d).ToArray(),
                 ActualTargets: actualTargets));
 
@@ -150,7 +150,7 @@ public class Phase1bHybridHandoffTests
                 anchorUtcTime,
                 split,
                 "FastTreeRecursive",
-                ExogenousFallbackSteps: 0,
+                FallbackOrRecursiveSteps: 0,
                 PredictedTargets: actualTargets.Select(v => v - 0.25d).ToArray(),
                 ActualTargets: actualTargets));
         }

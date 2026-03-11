@@ -319,7 +319,7 @@ public class Part4EvaluationTests
     {
         var predictedColumns = Enumerable.Range(1, 192).Select(step => $"Pred_tPlus{step}");
         var actualColumns = Enumerable.Range(1, 192).Select(step => $"Actual_tPlus{step}");
-        return string.Join(';', new[] { "anchorUtcTime", "Split", "Model", "ExogenousFallbackSteps" }
+        return string.Join(';', new[] { "anchorUtcTime", "Split", "Model", "FallbackOrRecursiveSteps" }
             .Concat(predictedColumns)
             .Concat(actualColumns));
     }

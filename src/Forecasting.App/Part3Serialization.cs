@@ -117,7 +117,7 @@ public static partial class Part3Modeling
 
         using var writer = new StreamWriter(outputCsvPath, false);
         var headerBuilder = new StringBuilder(capacity: 64 + PipelineConstants.HorizonSteps * 24);
-        headerBuilder.Append("anchorUtcTime;Split;Model;ExogenousFallbackSteps");
+        headerBuilder.Append("anchorUtcTime;Split;Model;FallbackOrRecursiveSteps");
         for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
         {
             headerBuilder.Append(';').Append("Pred_tPlus").Append(step);
@@ -138,7 +138,7 @@ public static partial class Part3Modeling
             rowBuilder.Append(forecast.AnchorUtcTime.ToString("yyyy-MM-dd HH:mm:ss", InvariantCulture));
             rowBuilder.Append(';').Append(forecast.Split);
             rowBuilder.Append(';').Append(forecast.ModelName);
-            rowBuilder.Append(';').Append(forecast.ExogenousFallbackSteps.ToString(InvariantCulture));
+            rowBuilder.Append(';').Append(forecast.FallbackOrRecursiveSteps.ToString(InvariantCulture));
 
             for (var step = 0; step < forecast.PredictedTargets.Count; step++)
             {
@@ -169,7 +169,7 @@ public static partial class Part3Modeling
         var anchorIndex = CsvParsing.FindRequiredColumnIndex(columns, "anchorUtcTime", "forecasts CSV");
         var splitIndex = CsvParsing.FindRequiredColumnIndex(columns, "Split", "forecasts CSV");
         var modelIndex = CsvParsing.FindRequiredColumnIndex(columns, "Model", "forecasts CSV");
-        var fallbackIndex = CsvParsing.FindRequiredColumnIndex(columns, "ExogenousFallbackSteps", "forecasts CSV");
+        var fallbackIndex = CsvParsing.FindRequiredColumnIndex(columns, "FallbackOrRecursiveSteps", "forecasts CSV");
         var predictedIndexes = Enumerable.Range(1, PipelineConstants.HorizonSteps)
             .Select(step => CsvParsing.FindRequiredColumnIndex(columns, $"Pred_tPlus{step}", "forecasts CSV"))
             .ToArray();
@@ -207,7 +207,7 @@ public static partial class Part3Modeling
                 anchorUtcTime,
                 parts[splitIndex],
                 parts[modelIndex],
-                CsvParsing.ParseRequiredInt(parts[fallbackIndex], lineNumber, "ExogenousFallbackSteps"),
+                CsvParsing.ParseRequiredInt(parts[fallbackIndex], lineNumber, "FallbackOrRecursiveSteps"),
                 predicted,
                 actual));
         }

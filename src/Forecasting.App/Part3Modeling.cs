@@ -115,7 +115,7 @@ public static partial class Part3Modeling
         return dayOfWeek * SlotsPerDay + timestamp.Hour * SlotsPerHour + slotWithinHour;
     }
 
-    private sealed record SeasonalKey(int DayOfWeek, int HourOfDay, int MinuteOfHour);
+    private sealed record SeasonalKey(int DayOfWeek, int HourOfDay);
 
     private sealed record SeasonalBaselineModel(
         IReadOnlyDictionary<SeasonalKey, double> Means,
@@ -148,7 +148,7 @@ public static partial class Part3Modeling
 
         void Train(IReadOnlyList<Part2SupervisedRow> trainRows, IReadOnlyList<Part2SupervisedRow> allRows);
 
-        (double[] Predictions, int RecursiveStepsBeyondAnchor) Predict(Part2SupervisedRow anchor);
+        (double[] Predictions, int FallbackOrRecursiveSteps) Predict(Part2SupervisedRow anchor);
     }
 
     private interface IPermutationImportanceModel
@@ -159,16 +159,22 @@ public static partial class Part3Modeling
 
     private sealed class BaselineSeasonalForecastingModel : IForecastingModel
     {
+        private readonly BaselineSeasonalOptions _options;
         private SeasonalBaselineModel? _model;
+
+        public BaselineSeasonalForecastingModel(BaselineSeasonalOptions options)
+        {
+            _options = options;
+        }
 
         public string ModelName => "BaselineSeasonal";
 
         public void Train(IReadOnlyList<Part2SupervisedRow> trainRows, IReadOnlyList<Part2SupervisedRow> allRows)
         {
-            _model = BuildSeasonalBaseline(trainRows);
+            _model = BuildSeasonalBaseline(trainRows, _options);
         }
 
-        public (double[] Predictions, int RecursiveStepsBeyondAnchor) Predict(Part2SupervisedRow anchor)
+        public (double[] Predictions, int FallbackOrRecursiveSteps) Predict(Part2SupervisedRow anchor)
         {
             return PredictWithBaseline(anchor.AnchorUtcTime, RequireModel());
         }
@@ -196,7 +202,7 @@ public static partial class Part3Modeling
             _model = BuildFastTreeRecursiveModel(trainRows, allRows, _options);
         }
 
-        public (double[] Predictions, int RecursiveStepsBeyondAnchor) Predict(Part2SupervisedRow anchor)
+        public (double[] Predictions, int FallbackOrRecursiveSteps) Predict(Part2SupervisedRow anchor)
         {
             return PredictWithFastTreeRecursive(anchor, RequireModel());
         }
@@ -325,7 +331,8 @@ public static partial class Part3Modeling
         IReadOnlyList<Part2SupervisedRow> rows,
         FastTreeOptions? fastTreeOptions = null,
         bool enablePfi = false,
-        int pfiHorizonStep = 1)
+        int pfiHorizonStep = 1,
+        BaselineSeasonalOptions? baselineOptions = null)
     {
         if (pfiHorizonStep < 1 || pfiHorizonStep > PipelineConstants.HorizonSteps)
         {
@@ -366,7 +373,9 @@ public static partial class Part3Modeling
             throw new InvalidOperationException("Part 3 requires at least one validation row (Split=Validation).");
         }
 
-        var modelRegistry = CreateModelRegistry(fastTreeOptions ?? new FastTreeOptions());
+        var modelRegistry = CreateModelRegistry(
+            fastTreeOptions ?? new FastTreeOptions(),
+            baselineOptions ?? new BaselineSeasonalOptions());
         var sw = System.Diagnostics.Stopwatch.StartNew();
         foreach (var model in modelRegistry)
         {
@@ -398,13 +407,13 @@ public static partial class Part3Modeling
                 inferenceTimers[model.ModelName].Start();
                 var prediction = model.Predict(anchor);
                 inferenceTimers[model.ModelName].Stop();
-                recursiveStepsByModel[model.ModelName] += prediction.RecursiveStepsBeyondAnchor;
+                recursiveStepsByModel[model.ModelName] += prediction.FallbackOrRecursiveSteps;
 
                 forecasts.Add(new Part3ForecastRow(
                     anchor.AnchorUtcTime,
                     anchor.Split,
                     model.ModelName,
-                    prediction.RecursiveStepsBeyondAnchor,
+                    prediction.FallbackOrRecursiveSteps,
                     prediction.Predictions,
                     anchor.HorizonTargets));
             }
@@ -435,12 +444,12 @@ public static partial class Part3Modeling
         return new Part3RunResult(forecasts, summary, pfiResult);
     }
 
-    private static List<IForecastingModel> CreateModelRegistry(FastTreeOptions fastTreeOptions)
+    private static List<IForecastingModel> CreateModelRegistry(FastTreeOptions fastTreeOptions, BaselineSeasonalOptions baselineOptions)
     {
         // Single registration point for model lineup keeps RunModels flow closed to branching.
         return
         [
-            new BaselineSeasonalForecastingModel(),
+            new BaselineSeasonalForecastingModel(baselineOptions),
             new FastTreeRecursiveForecastingModel(fastTreeOptions)
         ];
     }
@@ -652,21 +661,43 @@ public static partial class Part3Modeling
         return new Part3PfiResult(aggregated, options.PfiPermutationCount, validationRows.Count, pfiHorizonStep, perSeedDetails);
     }
 
-    private static SeasonalBaselineModel BuildSeasonalBaseline(IReadOnlyList<Part2SupervisedRow> trainRows)
+    private static SeasonalBaselineModel BuildSeasonalBaseline(
+        IReadOnlyList<Part2SupervisedRow> trainRows,
+        BaselineSeasonalOptions options)
     {
         if (trainRows.Count == 0)
         {
             throw new InvalidOperationException("Cannot build seasonal baseline with an empty training set.");
         }
 
-        var grouped = trainRows
-            .GroupBy(row => new SeasonalKey(row.DayOfWeek, row.HourOfDay, row.MinuteOfHour))
+        if (options.LookbackWeeks is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options.LookbackWeeks), "Baseline lookback weeks must be greater than zero when configured.");
+        }
+
+        var baselineRows = trainRows;
+        if (options.LookbackWeeks is int lookbackWeeks)
+        {
+            var windowStartUtc = trainRows.Max(row => row.AnchorUtcTime).AddDays(-(lookbackWeeks * 7));
+            baselineRows = trainRows
+                .Where(row => row.AnchorUtcTime >= windowStartUtc)
+                .ToList();
+
+            if (baselineRows.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    $"Baseline lookback window of {lookbackWeeks} weeks produced no training rows.");
+            }
+        }
+
+        var grouped = baselineRows
+            .GroupBy(row => new SeasonalKey(row.DayOfWeek, row.HourOfDay))
             .ToDictionary(group => group.Key, group => group.Average(row => row.TargetAtT));
 
-        return new SeasonalBaselineModel(grouped, trainRows.Average(row => row.TargetAtT));
+        return new SeasonalBaselineModel(grouped, baselineRows.Average(row => row.TargetAtT));
     }
 
-    private static (double[] Predictions, int RecursiveStepsBeyondAnchor) PredictWithBaseline(DateTime anchorUtcTime, SeasonalBaselineModel model)
+    private static (double[] Predictions, int FallbackOrRecursiveSteps) PredictWithBaseline(DateTime anchorUtcTime, SeasonalBaselineModel model)
     {
         var predictions = new double[PipelineConstants.HorizonSteps];
         var recursiveStepsBeyondAnchor = 0;
@@ -674,7 +705,7 @@ public static partial class Part3Modeling
         for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
         {
             var ts = anchorUtcTime.AddMinutes(step * PipelineConstants.MinutesPerStep);
-            var key = new SeasonalKey((int)ts.DayOfWeek, ts.Hour, ts.Minute);
+            var key = new SeasonalKey((int)ts.DayOfWeek, ts.Hour);
             if (model.Means.TryGetValue(key, out var mean))
             {
                 predictions[step - 1] = mean;
@@ -762,7 +793,7 @@ public static partial class Part3Modeling
         return new FastTreeRecursiveModel(mlContext, model, predictionEngine, history.RowByTimestamp, history.HistoryTimestamps, history.HistoryValues);
     }
 
-    private static (double[] Predictions, int RecursiveStepsBeyondAnchor) PredictWithFastTreeRecursive(
+    private static (double[] Predictions, int FallbackOrRecursiveSteps) PredictWithFastTreeRecursive(
         Part2SupervisedRow anchor,
         FastTreeRecursiveModel model)
     {
@@ -788,7 +819,7 @@ public static partial class Part3Modeling
 
     // Test seam: reuse the same recursive rollout with a deterministic scorer so tests can
     // assert exact step-by-step outputs without depending on ML.NET tree internals.
-    internal static (double[] Predictions, int RecursiveStepsBeyondAnchor) PredictWithRecursiveOracle(
+    internal static (double[] Predictions, int FallbackOrRecursiveSteps) PredictWithRecursiveOracle(
         Part2SupervisedRow anchor,
         IReadOnlyList<Part2SupervisedRow> allRows,
         Func<FeatureSnapshot, double> scorer)
@@ -830,7 +861,7 @@ public static partial class Part3Modeling
     /// step timing, context lookup, history reads, lag/rolling updates, and feeding each
     /// predicted value back into history for subsequent steps.
     /// </summary>
-    private static (double[] Predictions, int RecursiveStepsBeyondAnchor) PredictRecursively(
+    private static (double[] Predictions, int FallbackOrRecursiveSteps) PredictRecursively(
         Part2SupervisedRow anchor,
         IReadOnlyDictionary<DateTime, Part2SupervisedRow> rowByTimestamp,
         DateTime[] historyTimestamps,

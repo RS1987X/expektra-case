@@ -482,6 +482,7 @@ public static class PipelineRunner
         Directory.CreateDirectory(outputDirectory);
 
         var fastTreeOptions = new FastTreeOptions();
+        var baselineSeasonalOptions = new BaselineSeasonalOptions();
         var manifest = new
         {
             GeneratedAtUtc = DateTime.UtcNow,
@@ -500,6 +501,7 @@ public static class PipelineRunner
                 PipelineConstants.MinutesPerStep,
                 PipelineConstants.DefaultValidationWindowDays
             },
+            BaselineSeasonalOptions = baselineSeasonalOptions,
             FastTreeOptions = fastTreeOptions,
             InputPaths = inputPaths,
             OutputPaths = outputPaths,

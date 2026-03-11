@@ -5,7 +5,9 @@ public sealed record Part3ForecastRow(
     DateTime AnchorUtcTime,
     string Split,
     string ModelName,
-    int ExogenousFallbackSteps,
+    // BaselineSeasonal: seasonal-key misses that use global-mean fallback.
+    // FastTreeRecursive: recursive inference steps beyond the anchor timestamp.
+    int FallbackOrRecursiveSteps,
     IReadOnlyList<double> PredictedTargets,
     IReadOnlyList<double> ActualTargets);
 
@@ -13,7 +15,7 @@ public sealed record Part3ModelSummary(
     string ModelName,
     int AnchorsForecasted,
     int HorizonSteps,
-    int ExogenousFallbackSteps);
+    int FallbackOrRecursiveSteps);
 
 public sealed record Part3RunSummary(
     DateTime GeneratedAtUtc,
