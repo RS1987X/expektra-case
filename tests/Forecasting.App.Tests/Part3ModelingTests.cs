@@ -526,6 +526,37 @@ public class Part3ModelingTests
     }
 
     [Fact]
+    public void PredictWithRecursiveOracle_CursorAndBinarySearchHistoryReads_AreNumericallyEquivalent()
+    {
+        var anchorTime = new DateTime(2024, 1, 3, 0, 0, 0, DateTimeKind.Utc);
+        var start = anchorTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep);
+        var rows = new List<Part2SupervisedRow>(FeatureConfig.TargetLag192 + 32);
+
+        for (var i = 0; i < FeatureConfig.TargetLag192 + 32; i++)
+        {
+            var ts = start.AddMinutes(i * PipelineConstants.MinutesPerStep);
+            rows.Add(CreateOracleRow(ts, targetAtT: 1000.0 + i, temperature: 5.0, split: "Validation"));
+        }
+
+        var anchor = rows[^1];
+        var withCursor = Part3Modeling.PredictWithRecursiveOracle(
+            anchor,
+            rows,
+            snapshot => snapshot.TargetAtT + snapshot.TargetLag192 + (0.1 * snapshot.TargetLag672));
+        var withBinarySearch = Part3Modeling.PredictWithRecursiveOracleWithoutCursor(
+            anchor,
+            rows,
+            snapshot => snapshot.TargetAtT + snapshot.TargetLag192 + (0.1 * snapshot.TargetLag672));
+
+        Assert.Equal(withBinarySearch.FallbackOrRecursiveSteps, withCursor.FallbackOrRecursiveSteps);
+        Assert.Equal(withBinarySearch.Predictions.Length, withCursor.Predictions.Length);
+        for (var i = 0; i < withCursor.Predictions.Length; i++)
+        {
+            Assert.Equal(withBinarySearch.Predictions[i], withCursor.Predictions[i], 10);
+        }
+    }
+
+    [Fact]
     public void RunModels_SummaryModelsMatchForecastModelSet()
     {
         var rows = BuildSyntheticPart3Rows(trainCount: 120, validationCount: 8);
@@ -546,6 +577,61 @@ public class Part3ModelingTests
             var perModelForecastCount = result.Forecasts.Count(forecast =>
                 string.Equals(forecast.ModelName, model.ModelName, StringComparison.Ordinal));
             Assert.Equal(model.AnchorsForecasted, perModelForecastCount);
+        }
+    }
+
+    [Fact]
+    public void RunModels_ForecastOutputPreservesAnchorMajorOrdering()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 12, validationCount: 4);
+
+        var result = Part3Modeling.RunModels(rows);
+        var expectedOrder = rows
+            .SelectMany(anchor => new[] { "BaselineSeasonal", "FastTreeRecursive" }
+                .Select(modelName => (anchor.AnchorUtcTime, anchor.Split, modelName)))
+            .ToList();
+
+        var actualOrder = result.Forecasts
+            .Select(forecast => (forecast.AnchorUtcTime, forecast.Split, forecast.ModelName))
+            .ToList();
+
+        Assert.Equal(expectedOrder, actualOrder);
+    }
+
+    [Fact]
+    public void RunInferenceForTests_ModelMajorAndAnchorMajor_ArePredictionEquivalentAndKeepFallbackCounts()
+    {
+        var rows = BuildSyntheticPart3Rows(trainCount: 96, validationCount: 16);
+
+        var modelMajor = Part3Modeling.RunInferenceForTests(rows, useModelMajorOrder: true);
+        var anchorMajor = Part3Modeling.RunInferenceForTests(rows, useModelMajorOrder: false);
+
+        Assert.Equal(anchorMajor.Forecasts.Count, modelMajor.Forecasts.Count);
+        Assert.Equal(anchorMajor.RecursiveStepsByModel.Count, modelMajor.RecursiveStepsByModel.Count);
+
+        foreach (var kvp in anchorMajor.RecursiveStepsByModel)
+        {
+            Assert.True(modelMajor.RecursiveStepsByModel.ContainsKey(kvp.Key));
+            Assert.Equal(kvp.Value, modelMajor.RecursiveStepsByModel[kvp.Key]);
+        }
+
+        var modelMajorByKey = modelMajor.Forecasts.ToDictionary(
+            forecast => (forecast.AnchorUtcTime, forecast.Split, forecast.ModelName),
+            forecast => forecast);
+
+        foreach (var anchorForecast in anchorMajor.Forecasts)
+        {
+            var key = (anchorForecast.AnchorUtcTime, anchorForecast.Split, anchorForecast.ModelName);
+            Assert.True(modelMajorByKey.ContainsKey(key));
+
+            var modelForecast = modelMajorByKey[key];
+            Assert.Equal(anchorForecast.FallbackOrRecursiveSteps, modelForecast.FallbackOrRecursiveSteps);
+            Assert.Equal(anchorForecast.PredictedTargets.Count, modelForecast.PredictedTargets.Count);
+
+            for (var i = 0; i < anchorForecast.PredictedTargets.Count; i++)
+            {
+                Assert.Equal(anchorForecast.PredictedTargets[i], modelForecast.PredictedTargets[i], 10);
+            }
         }
     }
 

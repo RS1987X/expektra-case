@@ -188,11 +188,14 @@ public static partial class Part3Modeling
     private sealed class FastTreeRecursiveForecastingModel : IForecastingModel, IPermutationImportanceModel
     {
         private readonly FastTreeOptions _options;
+        private readonly float[] _reusableFeatures = new float[FeatureSchema.Length];
+        private readonly OneStepModelInput _reusableInput;
         private FastTreeRecursiveModel? _model;
 
         public FastTreeRecursiveForecastingModel(FastTreeOptions options)
         {
             _options = options;
+            _reusableInput = new OneStepModelInput { Features = _reusableFeatures };
         }
 
         public string ModelName => "FastTreeRecursive";
@@ -204,7 +207,7 @@ public static partial class Part3Modeling
 
         public (double[] Predictions, int FallbackOrRecursiveSteps) Predict(Part2SupervisedRow anchor)
         {
-            return PredictWithFastTreeRecursive(anchor, RequireModel());
+            return PredictWithFastTreeRecursive(anchor, RequireModel(), _reusableFeatures, _reusableInput);
         }
 
         public Part3PfiResult? ComputePermutationImportance(IReadOnlyList<Part2SupervisedRow> validationRows, int pfiHorizonStep)
@@ -270,6 +273,13 @@ public static partial class Part3Modeling
     /// </summary>
     private sealed class RecursiveHistoryState
     {
+        public struct HistoryReadCursor
+        {
+            public int BaseIndex;
+            public int PredictedIndex;
+            public bool Initialized;
+        }
+
         private readonly DateTime[] _baseTimestamps;
         private readonly double[] _baseValues;
         private readonly int _baseLength;
@@ -283,6 +293,16 @@ public static partial class Part3Modeling
             _baseLength = Math.Max(0, baseEndIndex + 1);
         }
 
+        public HistoryReadCursor CreateCursor()
+        {
+            return new HistoryReadCursor
+            {
+                BaseIndex = -1,
+                PredictedIndex = -1,
+                Initialized = false
+            };
+        }
+
         public double GetTargetValueAtOrBefore(DateTime timestamp, double fallback)
         {
             var predictedIndex = UpperBound(_predictedTimestamps, timestamp) - 1;
@@ -293,6 +313,35 @@ public static partial class Part3Modeling
 
             var baseIndex = UpperBound(_baseTimestamps, _baseLength, timestamp) - 1;
             return baseIndex >= 0 ? _baseValues[baseIndex] : fallback;
+        }
+
+        public double GetTargetValueAtOrBefore(DateTime timestamp, double fallback, ref HistoryReadCursor cursor)
+        {
+            if (!cursor.Initialized)
+            {
+                cursor.BaseIndex = UpperBound(_baseTimestamps, _baseLength, timestamp) - 1;
+                cursor.PredictedIndex = UpperBound(_predictedTimestamps, timestamp) - 1;
+                cursor.Initialized = true;
+            }
+            else
+            {
+                while ((cursor.BaseIndex + 1) < _baseLength && _baseTimestamps[cursor.BaseIndex + 1] <= timestamp)
+                {
+                    cursor.BaseIndex++;
+                }
+
+                while ((cursor.PredictedIndex + 1) < _predictedTimestamps.Count && _predictedTimestamps[cursor.PredictedIndex + 1] <= timestamp)
+                {
+                    cursor.PredictedIndex++;
+                }
+            }
+
+            if (cursor.PredictedIndex >= 0)
+            {
+                return _predictedValues[cursor.PredictedIndex];
+            }
+
+            return cursor.BaseIndex >= 0 ? _baseValues[cursor.BaseIndex] : fallback;
         }
 
         public void AppendPredicted(DateTime timestamp, double value)
@@ -384,8 +433,10 @@ public static partial class Part3Modeling
             trainSw.Stop();
             Console.Error.WriteLine($"[TIMING] {model.ModelName} Train: {trainSw.Elapsed.TotalSeconds:F2}s");
         }
-
+        
         // Compute PFI on validation data only when explicitly requested (it is expensive).
+        //only take first model with PFI capability for simplicity,
+        //if multiple are registered then we should loop through
         var pfiModel = modelRegistry.OfType<IPermutationImportanceModel>().FirstOrDefault();
         Part3PfiResult? pfiResult = null;
         if (enablePfi && pfiModel is not null)
@@ -396,32 +447,11 @@ public static partial class Part3Modeling
             Console.Error.WriteLine($"[TIMING] PFI (horizon t+{pfiHorizonStep}): {pfiSw.Elapsed.TotalSeconds:F2}s");
         }
 
-        var forecasts = new List<Part3ForecastRow>(forecastAnchors.Count * modelRegistry.Count);
-        var recursiveStepsByModel = modelRegistry.ToDictionary(model => model.ModelName, _ => 0, StringComparer.Ordinal);
-        var inferenceTimers = modelRegistry.ToDictionary(model => model.ModelName, _ => new System.Diagnostics.Stopwatch(), StringComparer.Ordinal);
-
-        foreach (var anchor in forecastAnchors)
-        {
-            foreach (var model in modelRegistry)
-            {
-                inferenceTimers[model.ModelName].Start();
-                var prediction = model.Predict(anchor);
-                inferenceTimers[model.ModelName].Stop();
-                recursiveStepsByModel[model.ModelName] += prediction.FallbackOrRecursiveSteps;
-
-                forecasts.Add(new Part3ForecastRow(
-                    anchor.AnchorUtcTime,
-                    anchor.Split,
-                    model.ModelName,
-                    prediction.FallbackOrRecursiveSteps,
-                    prediction.Predictions,
-                    anchor.HorizonTargets));
-            }
-        }
+        var inferenceResult = RunInference(modelRegistry, forecastAnchors, useModelMajorOrder: true);
 
         foreach (var model in modelRegistry)
         {
-            Console.Error.WriteLine($"[TIMING] {model.ModelName} Inference: {inferenceTimers[model.ModelName].Elapsed.TotalSeconds:F2}s ({forecastAnchors.Count} anchors)");
+            Console.Error.WriteLine($"[TIMING] {model.ModelName} Inference: {inferenceResult.InferenceTimers[model.ModelName].Elapsed.TotalSeconds:F2}s ({forecastAnchors.Count} anchors)");
         }
         sw.Stop();
         Console.Error.WriteLine($"[TIMING] Part3 total (train+pfi+infer): {sw.Elapsed.TotalSeconds:F2}s");
@@ -431,7 +461,7 @@ public static partial class Part3Modeling
                 model.ModelName,
                 forecastAnchors.Count,
                 PipelineConstants.HorizonSteps,
-                recursiveStepsByModel[model.ModelName]))
+                inferenceResult.RecursiveStepsByModel[model.ModelName]))
             .ToList();
 
         var summary = new Part3RunSummary(
@@ -441,7 +471,122 @@ public static partial class Part3Modeling
             validationRows.Count,
             modelSummaries);
 
-        return new Part3RunResult(forecasts, summary, pfiResult);
+        return new Part3RunResult(inferenceResult.Forecasts.ToList(), summary, pfiResult);
+    }
+
+    // Test seam for verifying loop-order equivalence while keeping public API stable.
+    internal static (IReadOnlyList<Part3ForecastRow> Forecasts, IReadOnlyDictionary<string, int> RecursiveStepsByModel)
+        RunInferenceForTests(
+            IReadOnlyList<Part2SupervisedRow> rows,
+            bool useModelMajorOrder,
+            FastTreeOptions? fastTreeOptions = null,
+            BaselineSeasonalOptions? baselineOptions = null)
+    {
+        var sorted = rows.OrderBy(row => row.AnchorUtcTime).ToList();
+        var trainRows = new List<Part2SupervisedRow>(sorted.Count);
+        var validationRows = new List<Part2SupervisedRow>(sorted.Count);
+        var forecastAnchors = new List<Part2SupervisedRow>(sorted.Count);
+
+        foreach (var row in sorted)
+        {
+            if (string.Equals(row.Split, "Train", StringComparison.OrdinalIgnoreCase))
+            {
+                trainRows.Add(row);
+                forecastAnchors.Add(row);
+                continue;
+            }
+
+            if (string.Equals(row.Split, "Validation", StringComparison.OrdinalIgnoreCase))
+            {
+                validationRows.Add(row);
+                forecastAnchors.Add(row);
+            }
+        }
+
+        if (trainRows.Count == 0 || validationRows.Count == 0)
+        {
+            throw new InvalidOperationException("Part 3 test inference requires both Train and Validation rows.");
+        }
+
+        var modelRegistry = CreateModelRegistry(
+            fastTreeOptions ?? new FastTreeOptions(),
+            baselineOptions ?? new BaselineSeasonalOptions());
+
+        foreach (var model in modelRegistry)
+        {
+            model.Train(trainRows, sorted);
+        }
+
+        var inferenceResult = RunInference(modelRegistry, forecastAnchors, useModelMajorOrder);
+        return (inferenceResult.Forecasts.ToList(), inferenceResult.RecursiveStepsByModel);
+    }
+
+    private static (
+        Part3ForecastRow[] Forecasts,
+        Dictionary<string, int> RecursiveStepsByModel,
+        Dictionary<string, System.Diagnostics.Stopwatch> InferenceTimers)
+        RunInference(
+            IReadOnlyList<IForecastingModel> modelRegistry,
+            IReadOnlyList<Part2SupervisedRow> forecastAnchors,
+            bool useModelMajorOrder)
+    {
+        var forecasts = new Part3ForecastRow[forecastAnchors.Count * modelRegistry.Count];
+        var recursiveStepsByModel = modelRegistry.ToDictionary(model => model.ModelName, _ => 0, StringComparer.Ordinal);
+        var inferenceTimers = modelRegistry.ToDictionary(model => model.ModelName, _ => new System.Diagnostics.Stopwatch(), StringComparer.Ordinal);
+
+        if (useModelMajorOrder)
+        {
+            for (var modelIndex = 0; modelIndex < modelRegistry.Count; modelIndex++)
+            {
+                var model = modelRegistry[modelIndex];
+                inferenceTimers[model.ModelName].Start();
+
+                for (var anchorIndex = 0; anchorIndex < forecastAnchors.Count; anchorIndex++)
+                {
+                    var anchor = forecastAnchors[anchorIndex];
+                    var prediction = model.Predict(anchor);
+                    recursiveStepsByModel[model.ModelName] += prediction.FallbackOrRecursiveSteps;
+
+                    var outputIndex = (anchorIndex * modelRegistry.Count) + modelIndex;
+                    forecasts[outputIndex] = new Part3ForecastRow(
+                        anchor.AnchorUtcTime,
+                        anchor.Split,
+                        model.ModelName,
+                        prediction.FallbackOrRecursiveSteps,
+                        prediction.Predictions,
+                        anchor.HorizonTargets);
+                }
+
+                inferenceTimers[model.ModelName].Stop();
+            }
+        }
+        else
+        {
+            for (var anchorIndex = 0; anchorIndex < forecastAnchors.Count; anchorIndex++)
+            {
+                var anchor = forecastAnchors[anchorIndex];
+                for (var modelIndex = 0; modelIndex < modelRegistry.Count; modelIndex++)
+                {
+                    var model = modelRegistry[modelIndex];
+                    inferenceTimers[model.ModelName].Start();
+                    var prediction = model.Predict(anchor);
+                    inferenceTimers[model.ModelName].Stop();
+
+                    recursiveStepsByModel[model.ModelName] += prediction.FallbackOrRecursiveSteps;
+
+                    var outputIndex = (anchorIndex * modelRegistry.Count) + modelIndex;
+                    forecasts[outputIndex] = new Part3ForecastRow(
+                        anchor.AnchorUtcTime,
+                        anchor.Split,
+                        model.ModelName,
+                        prediction.FallbackOrRecursiveSteps,
+                        prediction.Predictions,
+                        anchor.HorizonTargets);
+                }
+            }
+        }
+
+        return (forecasts, recursiveStepsByModel, inferenceTimers);
     }
 
     private static List<IForecastingModel> CreateModelRegistry(FastTreeOptions fastTreeOptions, BaselineSeasonalOptions baselineOptions)
@@ -795,12 +940,10 @@ public static partial class Part3Modeling
 
     private static (double[] Predictions, int FallbackOrRecursiveSteps) PredictWithFastTreeRecursive(
         Part2SupervisedRow anchor,
-        FastTreeRecursiveModel model)
+        FastTreeRecursiveModel model,
+        float[] reusableFeatures,
+        OneStepModelInput reusableRow)
     {
-        var features = new float[FeatureSchema.Length];
-        // Reuse input wrapper + feature buffer across recursive steps to avoid per-step allocations.
-        var reusableRow = new OneStepModelInput { Features = features };
-
         // Keep production FastTree scoring on the same recursive rollout used by test scorers,
         // so the state-transition logic can be verified independently of ML.NET internals.
         return PredictRecursively(
@@ -810,7 +953,7 @@ public static partial class Part3Modeling
             model.HistoryValues,
             snapshot =>
             {
-                FillFeatureVector(snapshot, features);
+                FillFeatureVector(snapshot, reusableFeatures);
                 var score = model.PredictionEngine.Predict(reusableRow).Score;
                 // Avoid propagating invalid model output through the recursive rollout.
                 return double.IsFinite(score) ? score : snapshot.TargetAtT;
@@ -825,7 +968,17 @@ public static partial class Part3Modeling
         Func<FeatureSnapshot, double> scorer)
     {
         var history = BuildRecursiveHistory(allRows);
-        return PredictRecursively(anchor, history.RowByTimestamp, history.HistoryTimestamps, history.HistoryValues, scorer);
+        return PredictRecursively(anchor, history.RowByTimestamp, history.HistoryTimestamps, history.HistoryValues, scorer, useCursorReads: true);
+    }
+
+    // Test seam: baseline rollout that uses binary-search history reads for equivalence checks.
+    internal static (double[] Predictions, int FallbackOrRecursiveSteps) PredictWithRecursiveOracleWithoutCursor(
+        Part2SupervisedRow anchor,
+        IReadOnlyList<Part2SupervisedRow> allRows,
+        Func<FeatureSnapshot, double> scorer)
+    {
+        var history = BuildRecursiveHistory(allRows);
+        return PredictRecursively(anchor, history.RowByTimestamp, history.HistoryTimestamps, history.HistoryValues, scorer, useCursorReads: false);
     }
 
     private static (IReadOnlyDictionary<DateTime, Part2SupervisedRow> RowByTimestamp, DateTime[] HistoryTimestamps, double[] HistoryValues) BuildRecursiveHistory(
@@ -866,7 +1019,8 @@ public static partial class Part3Modeling
         IReadOnlyDictionary<DateTime, Part2SupervisedRow> rowByTimestamp,
         DateTime[] historyTimestamps,
         double[] historyValues,
-        Func<FeatureSnapshot, double> scorer)
+        Func<FeatureSnapshot, double> scorer,
+        bool useCursorReads = true)
     {
         var predictions = new double[PipelineConstants.HorizonSteps];
         var recursiveStepsBeyondAnchor = 0;
@@ -883,6 +1037,9 @@ public static partial class Part3Modeling
             anchor.AnchorUtcTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep),
             FeatureConfig.RollingWindow96,
             anchor.TargetLag192Mean96);
+        var targetAtTCursor = history.CreateCursor();
+        var targetLag192Cursor = history.CreateCursor();
+        var targetLag672Cursor = history.CreateCursor();
 
         for (var step = 1; step <= PipelineConstants.HorizonSteps; step++)
         {
@@ -903,9 +1060,25 @@ public static partial class Part3Modeling
 
             // Read autoregressive inputs from the truncated history view. Once predictions start,
             // later steps see earlier predicted values instead of future actual targets.
-            var stepTargetAtT = history.GetTargetValueAtOrBefore(currentTime, anchor.TargetAtT);
-            var stepTargetLag192 = history.GetTargetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep), anchor.TargetLag192);
-            var stepTargetLag672 = history.GetTargetValueAtOrBefore(currentTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep), anchor.TargetLag672);
+            var stepTargetAtT = useCursorReads
+                ? history.GetTargetValueAtOrBefore(currentTime, anchor.TargetAtT, ref targetAtTCursor)
+                : history.GetTargetValueAtOrBefore(currentTime, anchor.TargetAtT);
+            var stepTargetLag192 = useCursorReads
+                ? history.GetTargetValueAtOrBefore(
+                    currentTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep),
+                    anchor.TargetLag192,
+                    ref targetLag192Cursor)
+                : history.GetTargetValueAtOrBefore(
+                    currentTime.AddMinutes(-FeatureConfig.TargetLag192 * PipelineConstants.MinutesPerStep),
+                    anchor.TargetLag192);
+            var stepTargetLag672 = useCursorReads
+                ? history.GetTargetValueAtOrBefore(
+                    currentTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep),
+                    anchor.TargetLag672,
+                    ref targetLag672Cursor)
+                : history.GetTargetValueAtOrBefore(
+                    currentTime.AddMinutes(-FeatureConfig.TargetLag672 * PipelineConstants.MinutesPerStep),
+                    anchor.TargetLag672);
             
             if (step > 1)
             {
