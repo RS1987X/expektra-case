@@ -286,6 +286,7 @@ public static partial class Part3Modeling
         private readonly List<DateTime> _predictedTimestamps = new(PipelineConstants.HorizonSteps);
         private readonly List<double> _predictedValues = new(PipelineConstants.HorizonSteps);
 
+
         public RecursiveHistoryState(DateTime[] baseTimestamps, double[] baseValues, int baseEndIndex)
         {
             _baseTimestamps = baseTimestamps;
@@ -599,7 +600,7 @@ public static partial class Part3Modeling
         ];
     }
 
-    private static Part3PfiResult? ComputePermutationImportance(
+    private static Part3PfiResult? ComputePermutationImportanceSingleRun(
         FastTreeRecursiveModel model,
         IReadOnlyList<Part2SupervisedRow> validationRows,
         int pfiHorizonStep,
@@ -726,11 +727,11 @@ public static partial class Part3Modeling
             return null;
 
         if (options.PfiModelSeeds <= 1)
-            return ComputePermutationImportance(primaryModel, validationRows, pfiHorizonStep, options.PfiPermutationCount);
+            return ComputePermutationImportanceSingleRun(primaryModel, validationRows, pfiHorizonStep, options.PfiPermutationCount);
 
         // Run PFI on the primary model + (PfiModelSeeds - 1) models with different seeds.
         var allRuns = new List<Part3PfiResult>();
-        var primary = ComputePermutationImportance(primaryModel, validationRows, pfiHorizonStep, options.PfiPermutationCount);
+        var primary = ComputePermutationImportanceSingleRun(primaryModel, validationRows, pfiHorizonStep, options.PfiPermutationCount);
         if (primary != null)
             allRuns.Add(primary);
 
@@ -739,7 +740,7 @@ public static partial class Part3Modeling
         for (int i = 1; i < options.PfiModelSeeds; i++)
         {
             var seedOptions = options with { Seed = options.Seed + i };
-            var mlContext = new MLContext(seed: seedOptions.Seed);
+            //var mlContext = new MLContext(seed: seedOptions.Seed);
 
             var validationData = validationRows
                 .Select(row => new OneStepModelInput
@@ -759,7 +760,7 @@ public static partial class Part3Modeling
             var allRows = primaryModel.RowByTimestamp.Values.ToList();
             var altModel = BuildFastTreeRecursiveModel(trainRows, allRows, seedOptions);
 
-            var result = ComputePermutationImportance(altModel, validationRows, pfiHorizonStep, options.PfiPermutationCount);
+            var result = ComputePermutationImportanceSingleRun(altModel, validationRows, pfiHorizonStep, options.PfiPermutationCount);
             if (result != null)
                 allRuns.Add(result);
         }
@@ -1133,6 +1134,7 @@ public static partial class Part3Modeling
         return (predictions, recursiveStepsBeyondAnchor);
     }
 
+    // Binary search: returns the insertion index of the first timestamp greater than target
     private static int UpperBound(DateTime[] values, int length, DateTime target)
     {
         var low = 0;

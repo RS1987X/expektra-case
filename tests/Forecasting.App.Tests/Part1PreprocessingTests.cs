@@ -125,9 +125,9 @@ public class Part1PreprocessingTests
             var preprocessed = Part1Preprocessing.BuildPreprocessedDatasetForEvaluation(dataPath, holidaysPath);
 
             Assert.Equal(new DateTime(2024, 1, 6, 0, 0, 0, DateTimeKind.Utc), preprocessed.AuditSummary.ValidationStartUtc);
-            Assert.Equal(4, preprocessed.PersistedFeatures.Count);
-            Assert.DoesNotContain(preprocessed.PersistedFeatures, row => row.UtcTime == new DateTime(2024, 1, 10, 0, 0, 0, DateTimeKind.Utc));
-            Assert.Contains(preprocessed.PersistedFeatures, row => row.UtcTime == new DateTime(2024, 1, 25, 0, 0, 0, DateTimeKind.Utc));
+            Assert.Equal(4, preprocessed.PersistedFeatureRows.Count);
+            Assert.DoesNotContain(preprocessed.PersistedFeatureRows, row => row.UtcTime == new DateTime(2024, 1, 10, 0, 0, 0, DateTimeKind.Utc));
+            Assert.Contains(preprocessed.PersistedFeatureRows, row => row.UtcTime == new DateTime(2024, 1, 25, 0, 0, 0, DateTimeKind.Utc));
 
             var droppedEvent = Assert.Single(preprocessed.AuditEvents);
             Assert.Equal(new DateTime(2024, 1, 10, 0, 0, 0, DateTimeKind.Utc), droppedEvent.UtcTime);
@@ -299,11 +299,11 @@ public class Part1PreprocessingTests
                 validationWindowDays: 3);
 
             // Jan 2 is first validation row and gets target from training carryover -> must be dropped.
-            Assert.DoesNotContain(preprocessed.PersistedFeatures,
+            Assert.DoesNotContain(preprocessed.PersistedFeatureRows,
                 row => row.UtcTime == new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc));
 
             // Jan 4 is imputed from prior validation observation (Jan 3) -> should remain.
-            Assert.Contains(preprocessed.PersistedFeatures,
+            Assert.Contains(preprocessed.PersistedFeatureRows,
                 row => row.UtcTime == new DateTime(2024, 1, 4, 0, 0, 0, DateTimeKind.Utc));
 
             Assert.Equal(1, preprocessed.AuditSummary.DroppedValidationRowsFromTrainingImputation);

@@ -5,11 +5,11 @@
     "version": "0.2.0",
     "configurations": [
         {
-  "name": "Debug Part3",
+  "name": "Debug Forecasting.App",
   "type": "coreclr",
   "request": "launch",
   "program": "${workspaceFolder}/src/Forecasting.App/bin/Debug/net10.0/Forecasting.App.dll",
-  "args": ["part3", "--max-rows", "120"],
+  "args": ["all", "--max-rows", "120", "--pfi"],
   "cwd": "${workspaceFolder}",
   "console": "integratedTerminal",
   "preLaunchTask": "Build"

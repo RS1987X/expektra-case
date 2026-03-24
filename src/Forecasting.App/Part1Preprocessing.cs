@@ -44,7 +44,7 @@ public sealed record PreprocessingAuditSummary(
     int DroppedDuplicateTimestampRows);
 
 public sealed record PreprocessedDataset(
-    IReadOnlyList<FeatureRow> PersistedFeatures,
+    IReadOnlyList<FeatureRow> PersistedFeatureRows,
     IReadOnlyList<PreprocessingAuditEvent> AuditEvents,
     PreprocessingAuditSummary AuditSummary);
 
@@ -147,8 +147,8 @@ public static class Part1Preprocessing
             seedTargetFromPriorSegment: true,
             priorSegmentTargetValue: lastObservedTrainingTarget);
 
-        var persistedFeatures = new List<FeatureRow>(trainBuilt.Features.Count + validationBuilt.Features.Count);
-        persistedFeatures.AddRange(trainBuilt.Features);
+        var persistedFeatureRows = new List<FeatureRow>(trainBuilt.Features.Count + validationBuilt.Features.Count);
+        persistedFeatureRows.AddRange(trainBuilt.Features);
 
         var auditEvents = new List<PreprocessingAuditEvent>();
         var droppedValidationRows = 0;
@@ -164,7 +164,7 @@ public static class Part1Preprocessing
 
             if (includeInPersistedDataset)
             {
-                persistedFeatures.Add(row);
+                persistedFeatureRows.Add(row);
             }
             else
             {
@@ -185,11 +185,11 @@ public static class Part1Preprocessing
             rawRows.Count,
             trainRows.Count,
             validationRows.Count,
-            persistedFeatures.Count,
+            persistedFeatureRows.Count,
             droppedValidationRows,
             droppedDuplicateTimestampRows);
 
-        return new PreprocessedDataset(persistedFeatures, auditEvents, summary);
+        return new PreprocessedDataset(persistedFeatureRows, auditEvents, summary);
     }
 
     public static IReadOnlyCollection<DateOnly> ReadSwedishPublicHolidays(string holidaysCsvPath)
@@ -308,6 +308,7 @@ public static class Part1Preprocessing
                 throw new FormatException($"Invalid row at line {lineNumber}: expected at least 5 columns.");
             }
 
+            // For timestamp, ensure accepted format, make it culture invariant, and handle timezones (if offset present adjust for that otherwise assume UTC)
             if (!DateTime.TryParseExact(
                     parts[0],
                     AcceptedDateTimeFormats,
@@ -351,6 +352,7 @@ public static class Part1Preprocessing
             .ToList();
     }
 
+    //Forward fill while track imputation, and calculate calendar features. Put everything into 
     private static (
         IReadOnlyList<FeatureRow> Features,
         IReadOnlyList<bool> TargetIsImputed,
@@ -419,6 +421,7 @@ public static class Part1Preprocessing
         bool seedFromPriorSegment = false,
         double priorSegmentValue = 0d)
     {
+        //find first non null index
         var firstKnownIndex = -1;
         for (var index = 0; index < values.Count; index++)
         {

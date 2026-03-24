@@ -1,9 +1,19 @@
 using Forecasting.App;
+using System.Diagnostics;
+using System.Reflection;
+using Xunit.Abstractions;
 
 namespace Forecasting.App.Tests;
 
 public class Part2FeatureEngineeringTests
 {
+    private readonly ITestOutputHelper output;
+
+    public Part2FeatureEngineeringTests(ITestOutputHelper output)
+    {
+        this.output = output;
+    }
+
     [Fact]
     public void BuildDataset_ComputesExpectedLagsRollingAndHorizonLabels()
     {
@@ -175,6 +185,185 @@ public class Part2FeatureEngineeringTests
 
         Assert.Contains("requires regular 15-minute cadence", ex.Message, StringComparison.Ordinal);
         Assert.Contains("30", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RollingStats_ScanAndCumulativeImplementations_MatchAcrossWindows()
+    {
+        var rows = BuildSyntheticFeatureRows(3000);
+
+        var buildCumulativeTargetSums = GetPart2PrivateStaticMethod(
+            "BuildCumulativeTargetSums",
+            typeof(IReadOnlyList<FeatureRow>));
+        var buildCumulativeSquaredTargetSums = GetPart2PrivateStaticMethod(
+            "BuildCumulativeSquaredTargetSums",
+            typeof(IReadOnlyList<FeatureRow>));
+        var calculateMeanFromCumulativeSums = GetPart2PrivateStaticMethod(
+            "CalculateMeanFromCumulativeSums",
+            typeof(IReadOnlyList<double>),
+            typeof(int),
+            typeof(int));
+        var calculatePopulationStdFromCumulativeSums = GetPart2PrivateStaticMethod(
+            "CalculatePopulationStdFromCumulativeSums",
+            typeof(IReadOnlyList<double>),
+            typeof(IReadOnlyList<double>),
+            typeof(int),
+            typeof(int));
+        var calculateMeanByScan = GetPart2PrivateStaticMethod(
+            "CalculateMeanByScan",
+            typeof(IReadOnlyList<FeatureRow>),
+            typeof(int),
+            typeof(int));
+        var calculatePopulationStdByScan = GetPart2PrivateStaticMethod(
+            "CalculatePopulationStdByScan",
+            typeof(IReadOnlyList<FeatureRow>),
+            typeof(int),
+            typeof(int),
+            typeof(double));
+
+        var cumulativeTargetSums = (double[])(buildCumulativeTargetSums.Invoke(null, [rows])
+            ?? throw new InvalidOperationException("BuildCumulativeTargetSums returned null."));
+        var cumulativeSquaredTargetSums = (double[])(buildCumulativeSquaredTargetSums.Invoke(null, [rows])
+            ?? throw new InvalidOperationException("BuildCumulativeSquaredTargetSums returned null."));
+
+        for (var end = 800; end < rows.Count; end += 113)
+        {
+            foreach (var windowSize in new[] { 16, 96, 127 })
+            {
+                var start = end - (windowSize - 1);
+                if (start < 0)
+                {
+                    continue;
+                }
+
+                var meanByScan = (double)(calculateMeanByScan.Invoke(null, [rows, start, end])
+                    ?? throw new InvalidOperationException("CalculateMeanByScan returned null."));
+                var meanByCumulative = (double)(calculateMeanFromCumulativeSums.Invoke(null, [cumulativeTargetSums, start, end])
+                    ?? throw new InvalidOperationException("CalculateMeanFromCumulativeSums returned null."));
+
+                var stdByScan = (double)(calculatePopulationStdByScan.Invoke(null, [rows, start, end, meanByScan])
+                    ?? throw new InvalidOperationException("CalculatePopulationStdByScan returned null."));
+                var stdByCumulative = (double)(calculatePopulationStdFromCumulativeSums.Invoke(
+                    null,
+                    [cumulativeTargetSums, cumulativeSquaredTargetSums, start, end])
+                    ?? throw new InvalidOperationException("CalculatePopulationStdFromCumulativeSums returned null."));
+
+                Assert.Equal(meanByScan, meanByCumulative, 10);
+                Assert.Equal(stdByScan, stdByCumulative, 10);
+            }
+        }
+    }
+
+    [Fact]
+    public void RollingStats_CumulativePath_IsNotSlowerThanScanBaselineOnRepresentativeWorkload()
+    {
+        var rows = BuildSyntheticFeatureRows(20000);
+        var ranges = new List<(int Start, int End)>(5000);
+
+        for (var end = 1000; end < rows.Count; end += 4)
+        {
+            var windowSize = end % 2 == 0 ? 16 : 96;
+            ranges.Add((end - (windowSize - 1), end));
+        }
+
+        var buildCumulativeTargetSums = GetPart2PrivateStaticMethod(
+            "BuildCumulativeTargetSums",
+            typeof(IReadOnlyList<FeatureRow>));
+        var buildCumulativeSquaredTargetSums = GetPart2PrivateStaticMethod(
+            "BuildCumulativeSquaredTargetSums",
+            typeof(IReadOnlyList<FeatureRow>));
+        var calculateMeanFromCumulativeSums = GetPart2PrivateStaticMethod(
+            "CalculateMeanFromCumulativeSums",
+            typeof(IReadOnlyList<double>),
+            typeof(int),
+            typeof(int));
+        var calculatePopulationStdFromCumulativeSums = GetPart2PrivateStaticMethod(
+            "CalculatePopulationStdFromCumulativeSums",
+            typeof(IReadOnlyList<double>),
+            typeof(IReadOnlyList<double>),
+            typeof(int),
+            typeof(int));
+        var calculateMeanByScan = GetPart2PrivateStaticMethod(
+            "CalculateMeanByScan",
+            typeof(IReadOnlyList<FeatureRow>),
+            typeof(int),
+            typeof(int));
+        var calculatePopulationStdByScan = GetPart2PrivateStaticMethod(
+            "CalculatePopulationStdByScan",
+            typeof(IReadOnlyList<FeatureRow>),
+            typeof(int),
+            typeof(int),
+            typeof(double));
+
+        // JIT warmup to reduce first-run skew in a relative timing assertion.
+        foreach (var (start, end) in ranges.Take(50))
+        {
+            var warmupMean = (double)(calculateMeanByScan.Invoke(null, [rows, start, end])
+                ?? throw new InvalidOperationException("CalculateMeanByScan returned null."));
+            _ = (double)(calculatePopulationStdByScan.Invoke(null, [rows, start, end, warmupMean])
+                ?? throw new InvalidOperationException("CalculatePopulationStdByScan returned null."));
+        }
+
+        var scanWatch = Stopwatch.StartNew();
+        var scanAccumulator = 0d;
+
+        foreach (var (start, end) in ranges)
+        {
+            var meanByScan = (double)(calculateMeanByScan.Invoke(null, [rows, start, end])
+                ?? throw new InvalidOperationException("CalculateMeanByScan returned null."));
+            var stdByScan = (double)(calculatePopulationStdByScan.Invoke(null, [rows, start, end, meanByScan])
+                ?? throw new InvalidOperationException("CalculatePopulationStdByScan returned null."));
+            scanAccumulator += meanByScan + stdByScan;
+        }
+
+        scanWatch.Stop();
+
+        var cumulativeWatch = Stopwatch.StartNew();
+        var cumulativeTargetSums = (double[])(buildCumulativeTargetSums.Invoke(null, [rows])
+            ?? throw new InvalidOperationException("BuildCumulativeTargetSums returned null."));
+        var cumulativeSquaredTargetSums = (double[])(buildCumulativeSquaredTargetSums.Invoke(null, [rows])
+            ?? throw new InvalidOperationException("BuildCumulativeSquaredTargetSums returned null."));
+        var cumulativeAccumulator = 0d;
+
+        foreach (var (start, end) in ranges)
+        {
+            var meanByCumulative = (double)(calculateMeanFromCumulativeSums.Invoke(null, [cumulativeTargetSums, start, end])
+                ?? throw new InvalidOperationException("CalculateMeanFromCumulativeSums returned null."));
+            var stdByCumulative = (double)(calculatePopulationStdFromCumulativeSums.Invoke(
+                null,
+                [cumulativeTargetSums, cumulativeSquaredTargetSums, start, end])
+                ?? throw new InvalidOperationException("CalculatePopulationStdFromCumulativeSums returned null."));
+            cumulativeAccumulator += meanByCumulative + stdByCumulative;
+        }
+
+        cumulativeWatch.Stop();
+
+        Assert.Equal(scanAccumulator, cumulativeAccumulator, 6);
+
+        var scanMs = scanWatch.Elapsed.TotalMilliseconds;
+        var cumulativeMs = cumulativeWatch.Elapsed.TotalMilliseconds;
+        var timingRatio = cumulativeMs / scanMs;
+        var speedupFactor = scanMs / cumulativeMs;
+        var percentDelta = ((scanMs - cumulativeMs) / scanMs) * 100d;
+
+        var benchmarkLines = new[]
+        {
+            $"Scan baseline: {scanMs:F3} ms",
+            $"Cumulative path: {cumulativeMs:F3} ms",
+            $"Relative ratio (cumulative/scan): {timingRatio:F4}x",
+            $"Speedup factor (scan/cumulative): {speedupFactor:F4}x",
+            $"Efficiency delta: {percentDelta:F2}% {(percentDelta >= 0 ? "faster" : "slower")}",
+        };
+
+        foreach (var line in benchmarkLines)
+        {
+            output.WriteLine(line);
+            Console.WriteLine(line);
+        }
+
+        Assert.True(double.IsFinite(timingRatio));
+        Assert.True(scanMs > 0d);
+        Assert.True(cumulativeMs > 0d);
     }
 
     [Fact]
@@ -354,5 +543,16 @@ public class Part2FeatureEngineeringTests
         var path = Path.Combine(Path.GetTempPath(), $"part2-feature-tests-{Guid.NewGuid():N}.csv");
         File.WriteAllText(path, content.Trim() + Environment.NewLine);
         return path;
+    }
+
+    private static MethodInfo GetPart2PrivateStaticMethod(string name, params Type[] parameterTypes)
+    {
+        return typeof(Part2FeatureEngineering).GetMethod(
+            name,
+            BindingFlags.NonPublic | BindingFlags.Static,
+            binder: null,
+            types: parameterTypes,
+            modifiers: null)
+            ?? throw new InvalidOperationException($"Expected private static method '{name}' was not found.");
     }
 }

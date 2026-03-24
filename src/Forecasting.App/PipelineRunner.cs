@@ -72,13 +72,13 @@ public static class PipelineRunner
         AddOutputLine(lines, "Running full pipeline (Part 1 -> Part 4)...", output);
 
         var preprocessed = Part1Preprocessing.BuildPreprocessedDatasetForEvaluation(dataPath, holidaysPath, validationWindowDays);
-        Part1Preprocessing.WriteFeatureMatrixCsv(preprocessed.PersistedFeatures, part1OutputPath);
+        Part1Preprocessing.WriteFeatureMatrixCsv(preprocessed.PersistedFeatureRows, part1OutputPath);
         Part1Preprocessing.WritePreprocessingAuditCsv(preprocessed.AuditEvents, part1AuditOutputPath);
         Part1Preprocessing.WritePreprocessingSummaryJson(preprocessed.AuditSummary, part1AuditSummaryOutputPath);
-        AddOutputLine(lines, $"Part 1 complete: {preprocessed.PersistedFeatures.Count} rows -> {part1OutputPath} (validation window: {validationWindowDays} days)", output);
+        AddOutputLine(lines, $"Part 1 complete: {preprocessed.PersistedFeatureRows.Count} rows -> {part1OutputPath} (validation window: {validationWindowDays} days)", output);
 
-        var allValidationStartUtc = preprocessed.PersistedFeatures.Max(row => row.UtcTime).AddDays(-validationWindowDays);
-        var part2Dataset = Part2FeatureEngineering.BuildDataset(preprocessed.PersistedFeatures, allValidationStartUtc);
+        var allValidationStartUtc = preprocessed.PersistedFeatureRows.Max(row => row.UtcTime).AddDays(-validationWindowDays);
+        var part2Dataset = Part2FeatureEngineering.BuildDataset(preprocessed.PersistedFeatureRows, allValidationStartUtc);
         Part2FeatureEngineering.WriteDatasetCsv(part2Dataset.Rows, part2OutputPath);
         Part2FeatureEngineering.WriteSummaryJson(part2Dataset.Summary, part2SummaryPath);
         AddOutputLine(lines, $"Part 2 complete: {part2Dataset.Summary.OutputRows} rows -> {part2OutputPath} (validation window: {validationWindowDays} days)", output);
@@ -150,14 +150,14 @@ public static class PipelineRunner
         }
 
         var preprocessed = Part1Preprocessing.BuildPreprocessedDatasetForEvaluation(dataPath, holidaysPath, validationWindowDays);
-        Part1Preprocessing.WriteFeatureMatrixCsv(preprocessed.PersistedFeatures, outputPath);
+        Part1Preprocessing.WriteFeatureMatrixCsv(preprocessed.PersistedFeatureRows, outputPath);
         Part1Preprocessing.WritePreprocessingAuditCsv(preprocessed.AuditEvents, auditOutputPath);
         Part1Preprocessing.WritePreprocessingSummaryJson(preprocessed.AuditSummary, auditSummaryOutputPath);
 
         return Success(
             output,
             $"Validation split starts at: {preprocessed.AuditSummary.ValidationStartUtc:yyyy-MM-dd HH:mm:ss} UTC",
-            $"Generated {preprocessed.PersistedFeatures.Count} persisted feature rows.",
+            $"Generated {preprocessed.PersistedFeatureRows.Count} persisted feature rows.",
             $"Saved feature matrix to: {outputPath}",
             $"Saved preprocessing audit events to: {auditOutputPath}",
             $"Saved preprocessing summary to: {auditSummaryOutputPath}");

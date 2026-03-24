@@ -7,6 +7,7 @@ public sealed record Part3ForecastRow(
     string ModelName,
     // BaselineSeasonal: seasonal-key misses that use global-mean fallback.
     // FastTreeRecursive: recursive inference steps beyond the anchor timestamp.
+    // Meaning depends on model, just used for bookkeeping not governing behaviour.
     int FallbackOrRecursiveSteps,
     IReadOnlyList<double> PredictedTargets,
     IReadOnlyList<double> ActualTargets);
